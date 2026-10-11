@@ -57,7 +57,8 @@ func clientData(typ, challenge string) []byte {
 func (k *softKey) register(options map[string]any) json.RawMessage {
 	pk := options["publicKey"].(map[string]any)
 	k.handle, _ = b64.DecodeString(pk["user"].(map[string]any)["id"].(string))
-	x, y := k.priv.PublicKey.X.FillBytes(make([]byte, 32)), k.priv.PublicKey.Y.FillBytes(make([]byte, 32))
+	point, _ := k.priv.PublicKey.Bytes() // 0x04 || X || Y
+	x, y := point[1:33], point[33:65]
 	cose, _ := cbor.Marshal(map[int]any{1: 2, 3: -7, -1: 1, -2: x, -3: y})
 	attested := make([]byte, 16) // AAGUID
 	attested = binary.BigEndian.AppendUint16(attested, uint16(len(k.id)))
