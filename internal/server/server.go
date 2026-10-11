@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -178,19 +179,19 @@ func (s *Server) guard(spec routeSpec, h http.Handler) http.Handler {
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*httpx.Identity, bool) {
 	sess, user, err := s.sessions.Lookup(r.Context(), r)
 	if err != nil {
-		if err != auth.ErrNoSession {
+		if !errors.Is(err, auth.ErrNoSession) {
 			httpx.InternalError(w, r, err)
 			return nil, false
 		}
 		httpx.ErrorCode(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
 		return nil, false
 	}
-	grants, err := s.store.Grants(r.Context(), user.ID)
+	access, err := files.AccessFor(r.Context(), s.store, user)
 	if err != nil {
 		httpx.InternalError(w, r, err)
 		return nil, false
 	}
-	return &httpx.Identity{User: user, Session: sess, Access: &files.Access{Admin: user.IsAdmin(), Grants: grants}}, true
+	return &httpx.Identity{User: user, Session: sess, Access: access}, true
 }
 
 // requiresTOTP: admins and anyone who can upload or create shares.

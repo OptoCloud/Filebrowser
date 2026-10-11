@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"regexp"
@@ -18,6 +19,20 @@ type userView struct {
 	TOTPEnabled bool          `json:"totp_enabled"`
 	HasPassword bool          `json:"has_password"`
 	Grants      []store.Grant `json:"grants"`
+}
+
+// targetUser loads the user named by the {id} path value.
+func (s *Server) targetUser(w http.ResponseWriter, r *http.Request) (*store.User, bool) {
+	uid, ok := parseID(w, r)
+	if !ok {
+		return nil, false
+	}
+	u, err := s.store.UserByID(r.Context(), uid)
+	if err != nil {
+		httpx.FileError(w, r, err)
+		return nil, false
+	}
+	return u, true
 }
 
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
@@ -118,19 +133,15 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	uid, ok := parseID(w, r)
+	target, ok := s.targetUser(w, r)
 	if !ok {
 		return
 	}
+	uid := target.ID
 	ctx := r.Context()
 	me := httpx.IdentityFrom(ctx)
 	if (req.Role != nil && !validRole(*req.Role)) || (req.QuotaBytes != nil && *req.QuotaBytes < 0) {
 		httpx.Error(w, http.StatusBadRequest, "invalid role or quota")
-		return
-	}
-	target, err := s.store.UserByID(ctx, uid)
-	if err != nil {
-		httpx.FileError(w, r, err)
 		return
 	}
 	demote := req.Role != nil && *req.Role != "admin" && target.IsAdmin()
@@ -158,23 +169,19 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.files.InvalidateUsage(uid)
 	s.audit.Log(ctx, audit.AdminUserUpdate, target.Username, req)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
-	uid, ok := parseID(w, r)
+	target, ok := s.targetUser(w, r)
 	if !ok {
 		return
 	}
+	uid := target.ID
 	ctx := r.Context()
 	me := httpx.IdentityFrom(ctx)
 	if uid == me.User.ID {
 		httpx.Error(w, http.StatusBadRequest, "you cannot delete yourself")
-		return
-	}
-	target, err := s.store.UserByID(ctx, uid)
-	if err != nil {
-		httpx.FileError(w, r, err)
 		return
 	}
 	if target.IsAdmin() {
@@ -193,7 +200,7 @@ func (s *Server) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Log(ctx, audit.AdminUserDelete, target.Username, nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleAdminSetGrants(w http.ResponseWriter, r *http.Request) {
@@ -201,21 +208,17 @@ func (s *Server) handleAdminSetGrants(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	uid, ok := parseID(w, r)
+	target, ok := s.targetUser(w, r)
 	if !ok {
 		return
 	}
+	uid := target.ID
 	grants, ok := cleanGrants(req)
 	if !ok {
 		httpx.Error(w, http.StatusBadRequest, "invalid grants")
 		return
 	}
 	ctx := r.Context()
-	target, err := s.store.UserByID(ctx, uid)
-	if err != nil {
-		httpx.FileError(w, r, err)
-		return
-	}
 	before, err := s.store.Grants(ctx, uid)
 	if err != nil {
 		httpx.InternalError(w, r, err)
@@ -241,20 +244,16 @@ func (s *Server) handleAdminSetGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	s.files.InvalidateUsage(uid)
 	s.audit.Log(ctx, audit.AdminGrants, target.Username, map[string]any{"before": before, "after": grants})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleAdminResetTOTP(w http.ResponseWriter, r *http.Request) {
-	uid, ok := parseID(w, r)
+	target, ok := s.targetUser(w, r)
 	if !ok {
 		return
 	}
+	uid := target.ID
 	ctx := r.Context()
-	target, err := s.store.UserByID(ctx, uid)
-	if err != nil {
-		httpx.FileError(w, r, err)
-		return
-	}
 	if err := s.store.DisableTOTP(ctx, uid); err != nil {
 		httpx.FileError(w, r, err)
 		return
@@ -264,7 +263,7 @@ func (s *Server) handleAdminResetTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Log(ctx, audit.AdminResetTOTP, target.Username, nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleAdminSessions(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +277,7 @@ func (s *Server) handleAdminSessions(w http.ResponseWriter, r *http.Request) {
 	for _, x := range list {
 		sess := x.Session
 		out = append(out, sessionView{ID: auth.PublicID(sess.IDHash), Session: &sess, Username: x.Username,
-			Current: string(sess.IDHash) == string(me.Session.IDHash)})
+			Current: bytes.Equal(sess.IDHash, me.Session.IDHash)})
 	}
 	httpx.JSON(w, http.StatusOK, out)
 }
@@ -294,7 +293,7 @@ func (s *Server) handleAdminDeleteSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.audit.Log(r.Context(), audit.AdminSessionKill, r.PathValue("id")[:12], nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleAdminInvites(w http.ResponseWriter, r *http.Request) {
@@ -362,7 +361,7 @@ func (s *Server) handleAdminDeleteInvite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.audit.Log(r.Context(), audit.AdminInviteDel, strconv.FormatInt(iid, 10), nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {

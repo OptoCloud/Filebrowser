@@ -112,7 +112,7 @@ func TestNoAccountLockout(t *testing.T) {
 	h.user("victim", "user")
 	attacker := h.app()
 	attacker.ip = "203.0.113.9"
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		attacker.do("POST", "/api/auth/login", map[string]string{"username": "victim", "password": "wrong password " + strconv.Itoa(i)})
 	}
 	owner := h.app()
@@ -137,24 +137,12 @@ func TestFirstPasswordNeedsReauth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := func(age time.Duration) *client {
-		token := auth.NewToken(32)
-		now := time.Now()
-		err := h.store.CreateSession(ctx, &store.Session{IDHash: h.srv.keys.HashToken(token), UserID: u.ID,
-			CreatedAt: now.Add(-age), LastSeenAt: now, ExpiresAt: now.Add(time.Hour), AuthMethod: "oidc", MFA: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := h.app()
-		c.cookies["fb_session"] = &http.Cookie{Name: "fb_session", Value: token}
-		return c
-	}
-	rec := session(time.Hour).do("POST", "/api/me/password", map[string]string{"new": testPassword})
+	rec := h.session(u, time.Hour).do("POST", "/api/me/password", map[string]string{"new": testPassword})
 	expect(t, rec, 401)
 	if decode[map[string]string](t, rec)["code"] != "reauth_required" {
 		t.Fatalf("body %s", rec.Body.String())
 	}
-	expect(t, session(time.Minute).do("POST", "/api/me/password", map[string]string{"new": testPassword}), 200)
+	expect(t, h.session(u, time.Minute).do("POST", "/api/me/password", map[string]string{"new": testPassword}), 200)
 }
 
 // F16: malformed audit filters are rejected, not passed to the database.
@@ -178,5 +166,65 @@ func TestSignedLinkHeaders(t *testing.T) {
 	expect(t, rec, 200)
 	if rec.Header().Get("Cache-Control") != "private, no-store" || rec.Header().Get("Cross-Origin-Resource-Policy") == "" {
 		t.Errorf("headers %v", rec.Header())
+	}
+}
+
+// session logs u in directly, as an OIDC login created age ago.
+func (h *harness) session(u *store.User, age time.Duration) *client {
+	h.t.Helper()
+	token := auth.NewToken(32)
+	now := time.Now()
+	err := h.store.CreateSession(context.Background(), &store.Session{IDHash: h.srv.keys.HashToken(token), UserID: u.ID,
+		CreatedAt: now.Add(-age), LastSeenAt: now, ExpiresAt: now.Add(time.Hour), AuthMethod: "oidc", MFA: true})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	c := h.app()
+	c.cookies["fb_session"] = &http.Cookie{Name: "fb_session", Value: token}
+	return c
+}
+
+// An account without a password cannot unlink its last login provider.
+func TestOIDCUnlinkKeepsALoginMethod(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	u, err := h.store.CreateUser(ctx, "oidconly", "", "user", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{"a", "b"} {
+		if err := h.store.LinkOIDC(ctx, u.ID, "https://idp", sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := h.session(u, time.Minute)
+	expect(t, c.do("POST", "/api/me/oidc/unlink", map[string]string{"issuer": "https://idp", "subject": "a"}), 200)
+	rec := c.do("POST", "/api/me/oidc/unlink", map[string]string{"issuer": "https://idp", "subject": "b"})
+	expect(t, rec, 409)
+	if ids, _ := h.store.OIDCIdentities(ctx, u.ID); len(ids) != 1 {
+		t.Fatalf("identities left: %v", ids)
+	}
+	expect(t, c.do("POST", "/api/me/password", map[string]string{"new": testPassword}), 200)
+	c = h.login("oidconly")
+	expect(t, c.do("POST", "/api/me/oidc/unlink", map[string]string{"issuer": "https://idp", "subject": "b"}), 200)
+}
+
+// Disabling TOTP is throttled like any other password or code check.
+func TestTOTPDisableIsThrottled(t *testing.T) {
+	h := newHarness(t)
+	h.user("reader", "user", store.Grant{Path: "pub", Permission: "read"})
+	c := h.login("reader")
+	setup := decode[map[string]string](t, c.do("POST", "/api/auth/totp/setup", struct{}{}))
+	secret, err := base32Decode(setup["secret"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, c.do("POST", "/api/auth/totp/enable", map[string]string{"code": auth.TOTPCode(secret, time.Now())}), 200)
+	var last int
+	for i := range 8 {
+		last = c.do("POST", "/api/auth/totp/disable", map[string]string{"password": "wrong password " + strconv.Itoa(i), "code": "000000"}).Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("status after repeated failures = %d, want 429", last)
 	}
 }

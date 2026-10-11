@@ -138,12 +138,11 @@ func (o *OIDC) Start(ctx context.Context, w http.ResponseWriter, providerID stri
 	if err != nil {
 		return "", err
 	}
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 nosemgrep -- Secure is off only with dev = true (http://localhost)
-		Name: o.cookieName(), Value: base64.RawURLEncoding.EncodeToString(ct), Path: "/",
-		MaxAge: 600, HttpOnly: true, Secure: o.secure,
+	SetCookie(w, Cookie{
+		Name: o.cookieName(), Value: base64.RawURLEncoding.EncodeToString(ct), MaxAge: 600,
 		// Lax: the callback is a top-level cross-site navigation from the provider.
 		SameSite: http.SameSiteLaxMode,
-	})
+	}, o.secure)
 	return p.oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), nil
 }
 
@@ -153,7 +152,7 @@ func (o *OIDC) Callback(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return nil, errors.New("missing state cookie")
 	}
-	http.SetCookie(w, &http.Cookie{Name: o.cookieName(), Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: o.secure, SameSite: http.SameSiteLaxMode}) // #nosec G124 nosemgrep -- Secure is off only with dev = true (http://localhost)
+	ClearCookie(w, o.cookieName(), o.secure, http.SameSiteLaxMode)
 	ct, err := base64.RawURLEncoding.DecodeString(c.Value)
 	if err != nil {
 		return nil, errors.New("bad state cookie")

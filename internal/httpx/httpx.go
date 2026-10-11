@@ -83,6 +83,9 @@ func JSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// OK writes the {"ok": true} body used by actions with nothing else to return.
+func OK(w http.ResponseWriter) { JSON(w, http.StatusOK, map[string]any{"ok": true}) }
+
 type errorBody struct {
 	Error string `json:"error"`
 	Code  string `json:"code,omitempty"`
@@ -101,8 +104,7 @@ func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			Error(w, http.StatusRequestEntityTooLarge, "request body too large")
 		} else {
 			Error(w, http.StatusBadRequest, "invalid JSON body")
@@ -119,6 +121,9 @@ func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
 // FileError maps files/store errors to HTTP responses.
 func FileError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case r.Context().Err() != nil && errors.Is(err, r.Context().Err()):
+		// The client went away; nothing went wrong on this side.
+		Error(w, http.StatusServiceUnavailable, "request cancelled")
 	case errors.Is(err, files.ErrNotFound), errors.Is(err, store.ErrNotFound):
 		Error(w, http.StatusNotFound, "not found")
 	case errors.Is(err, files.ErrForbidden):
@@ -149,14 +154,20 @@ func InternalError(w http.ResponseWriter, r *http.Request, err error) {
 	Error(w, http.StatusInternalServerError, "internal error")
 }
 
-// QueryPath reads and cleans a path query parameter.
-func QueryPath(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
-	p, err := files.Clean(r.URL.Query().Get(name))
+// CleanPath cleans a client-supplied path, writing the error response if it
+// is invalid.
+func CleanPath(w http.ResponseWriter, r *http.Request, raw string) (string, bool) {
+	p, err := files.Clean(raw)
 	if err != nil {
 		FileError(w, r, err)
 		return "", false
 	}
 	return p, true
+}
+
+// QueryPath reads and cleans a path query parameter.
+func QueryPath(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	return CleanPath(w, r, r.URL.Query().Get(name))
 }
 
 // CleanPaths cleans a list of client paths, rejecting empty lists.
@@ -185,10 +196,13 @@ func ContentDisposition(kind, name string) string {
 		}
 		return r
 	}, name)
-	return kind + `; filename="` + ascii + `"; filename*=UTF-8''` + pathEscape(name)
+	return kind + `; filename="` + ascii + `"; filename*=UTF-8''` + PathEscape(name)
 }
 
-func pathEscape(s string) string {
+// PathEscape percent-encodes everything except RFC 3986 unreserved characters,
+// which makes the result valid both as a URL path segment and as an RFC 5987
+// ext-value.
+func PathEscape(s string) string {
 	const hex = "0123456789ABCDEF"
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {

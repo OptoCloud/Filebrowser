@@ -94,7 +94,7 @@ func (s *Service) Probe(ctx context.Context, path string) (*Probe, error) {
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	v, err, _ := s.probeSF.Do(path+"|"+strconv.FormatInt(mtime, 10), func() (any, error) {
+	return s.probes.do(ctx, path+"|"+strconv.FormatInt(mtime, 10), func(ctx context.Context) (*Probe, error) {
 		release, err := s.runner.AcquireLight(ctx)
 		if err != nil {
 			return nil, err
@@ -120,10 +120,6 @@ func (s *Service) Probe(ctx context.Context, path string) (*Probe, error) {
 		}
 		return p, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return v.(*Probe), nil
 }
 
 // ffprobe runs one probe pass. The header pass reads stream parameters from
@@ -150,7 +146,7 @@ func (s *Service) ffprobe(ctx context.Context, path string, full bool) (*Probe, 
 
 var decoderSet = func() map[string]bool {
 	m := map[string]bool{"dts": true} // codec "dts" is decoded by "dca"
-	for _, d := range strings.Split(decoders, ",") {
+	for d := range strings.SplitSeq(decoders, ",") {
 		m[d] = true
 	}
 	return m

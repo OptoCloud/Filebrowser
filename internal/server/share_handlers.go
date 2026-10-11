@@ -96,7 +96,7 @@ func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Log(ctx, audit.ShareRevoked, sh.Path, map[string]any{"share_id": sid})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 // Share origin (public)
@@ -122,6 +122,25 @@ func (s *Server) resolveShare(w http.ResponseWriter, r *http.Request, requireUnl
 		return nil
 	}
 	return res
+}
+
+// downloadShare resolves an unlocked download share and the share-relative
+// path in ?path= (real path, confined to the share).
+func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) (*shares.Resolved, string, bool) {
+	res := s.resolveShare(w, r, true)
+	if res == nil {
+		return nil, "", false
+	}
+	if res.Share.Kind != "download" {
+		httpx.Error(w, http.StatusNotFound, "not found")
+		return nil, "", false
+	}
+	p, err := res.Sub(r.URL.Query().Get("path"))
+	if err != nil {
+		httpx.FileError(w, r, err)
+		return nil, "", false
+	}
+	return res, p, true
 }
 
 func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
@@ -173,21 +192,16 @@ func (s *Server) handleShareUnlock(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "wrong password")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleShareList(w http.ResponseWriter, r *http.Request) {
-	res := s.resolveShare(w, r, true)
-	if res == nil {
+	res, p, ok := s.downloadShare(w, r)
+	if !ok {
 		return
 	}
-	if res.Share.Kind != "download" || !res.Share.IsDir {
+	if !res.Share.IsDir {
 		httpx.Error(w, http.StatusNotFound, "not found")
-		return
-	}
-	p, err := res.Sub(r.URL.Query().Get("path"))
-	if err != nil {
-		httpx.FileError(w, r, err)
 		return
 	}
 	entries, _, err := s.files.FS.List(res.Access, p)
@@ -230,17 +244,8 @@ func (s *Server) countDownload(w http.ResponseWriter, r *http.Request, res *shar
 }
 
 func (s *Server) handleShareFile(w http.ResponseWriter, r *http.Request) {
-	res := s.resolveShare(w, r, true)
-	if res == nil {
-		return
-	}
-	if res.Share.Kind != "download" {
-		httpx.Error(w, http.StatusNotFound, "not found")
-		return
-	}
-	p, err := res.Sub(r.URL.Query().Get("path"))
-	if err != nil {
-		httpx.FileError(w, r, err)
+	res, p, ok := s.downloadShare(w, r)
+	if !ok {
 		return
 	}
 	if fi, err := s.files.FS.Stat(p); err != nil {
@@ -253,29 +258,8 @@ func (s *Server) handleShareFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && !s.countDownload(w, r, res, p) {
 		return
 	}
-	inline := r.URL.Query().Get("inline") == "1"
-	if inline && files.MimeType(p) == "application/pdf" {
-		// Allow the share page itself to frame the PDF preview.
-		serveFramablePDF(w, r, s.files.FS, p, "'self'")
-		return
-	}
-	serveFile(w, r, s.files.FS, p, inline, true)
-}
-
-func serveFramablePDF(w http.ResponseWriter, r *http.Request, fsys *files.FS, p, ancestors string) {
-	f, fi, err := fsys.OpenFile(p)
-	if err != nil {
-		httpx.FileError(w, r, err)
-		return
-	}
-	defer f.Close()
-	httpx.UserContentHeaders(w, "application/pdf", true, fi.Name())
-	w.Header().Del("X-Frame-Options")
-	w.Header().Set("Content-Security-Policy", w.Header().Get("Content-Security-Policy")+"; frame-ancestors "+ancestors)
-	if w.Header().Get("Cache-Control") == "" {
-		w.Header().Set("Cache-Control", "private, no-cache")
-	}
-	http.ServeContent(w, r, "", fi.ModTime(), f)
+	// The share page itself may frame the PDF preview.
+	serveFile(w, r, s.files.FS, p, fileOpts{inline: r.URL.Query().Get("inline") == "1", allowPDF: true, frameAncestors: "'self'"})
 }
 
 func (s *Server) handleShareZip(w http.ResponseWriter, r *http.Request) {
@@ -307,28 +291,13 @@ func (s *Server) handleShareZip(w http.ResponseWriter, r *http.Request) {
 	if !s.countDownload(w, r, res, res.Share.Path) {
 		return
 	}
-	httpx.UserContentHeaders(w, "application/zip", false, zipName(paths))
-	w.Header().Set("Cache-Control", "no-store")
-	if err := s.files.FS.WriteZip(r.Context(), w, paths, res.Allow); err != nil {
-		panic(http.ErrAbortHandler)
-	}
+	serveZip(w, r, s.files.FS, paths, res.Allow)
 }
 
 func (s *Server) handleShareThumb(w http.ResponseWriter, r *http.Request) {
-	res := s.resolveShare(w, r, true)
-	if res == nil {
-		return
+	if _, p, ok := s.downloadShare(w, r); ok {
+		s.serveThumb(w, r, p)
 	}
-	if res.Share.Kind != "download" {
-		httpx.Error(w, http.StatusNotFound, "not found")
-		return
-	}
-	p, err := res.Sub(r.URL.Query().Get("path"))
-	if err != nil {
-		httpx.FileError(w, r, err)
-		return
-	}
-	s.serveThumb(w, r, p)
 }
 
 // handleSignedLink serves a file via a short-lived HMAC-signed URL (external
@@ -351,12 +320,11 @@ func (s *Server) handleSignedLink(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "link expired")
 		return
 	}
-	grants, err := s.store.Grants(ctx, user.ID)
+	a, err := files.AccessFor(ctx, s.store, user)
 	if err != nil {
 		httpx.InternalError(w, r, err)
 		return
 	}
-	a := &files.Access{Admin: user.IsAdmin(), Grants: grants}
 	p, err := files.Clean(link.Path)
 	if err == nil {
 		p, err = s.files.FS.Authorize(a, p, files.PermRead)
@@ -375,19 +343,10 @@ func (s *Server) handleSignedLink(w http.ResponseWriter, r *http.Request) {
 			httpx.FileError(w, r, err)
 			return
 		}
-		defer f.Close()
-		fi, err := f.Stat()
-		if err != nil {
-			httpx.InternalError(w, r, err)
-			return
-		}
 		httpx.UserContentHeaders(w, "video/mp4", true, files.Base(p)+".mp4")
-		http.ServeContent(w, r, "", fi.ModTime(), f)
+		serveOpened(w, r, f)
 		return
 	}
-	if link.Inline && files.MimeType(p) == "application/pdf" {
-		serveFramablePDF(w, r, s.files.FS, p, s.cfg.AppOrigin)
-		return
-	}
-	serveFile(w, r, s.files.FS, p, link.Inline, true)
+	// The app's preview iframe may frame a PDF.
+	serveFile(w, r, s.files.FS, p, fileOpts{inline: link.Inline, allowPDF: true, frameAncestors: s.cfg.AppOrigin})
 }

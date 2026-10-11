@@ -175,9 +175,31 @@ func (s *Store) LinkOIDC(ctx context.Context, userID int64, issuer, subject stri
 	return err
 }
 
+// UnlinkOIDC removes a linked identity. It returns ErrLastLogin instead if
+// that would leave the user with no way to log in (no password and no other
+// linked identity).
 func (s *Store) UnlinkOIDC(ctx context.Context, userID int64, issuer, subject string) error {
-	return affected(s.pool.Exec(ctx, `DELETE FROM oidc_identities WHERE user_id = $1 AND issuer = $2 AND subject = $3`,
-		userID, issuer, subject))
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// Lock the user row so concurrent unlinks cannot both pass the check.
+		var hasPassword bool
+		if err := tx.QueryRow(ctx, `SELECT password_hash <> '' FROM users WHERE id = $1 FOR UPDATE`, userID).
+			Scan(&hasPassword); err != nil {
+			return notFound(err)
+		}
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM oidc_identities WHERE user_id = $1`, userID).Scan(&n); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM oidc_identities WHERE user_id = $1 AND issuer = $2 AND subject = $3`,
+			userID, issuer, subject)
+		if err := affected(tag, err); err != nil {
+			return err
+		}
+		if !hasPassword && n <= 1 {
+			return ErrLastLogin // rolls the delete back
+		}
+		return nil
+	})
 }
 
 func (s *Store) OIDCIdentities(ctx context.Context, userID int64) ([]OIDCIdentity, error) {

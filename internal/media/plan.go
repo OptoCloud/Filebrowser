@@ -17,7 +17,7 @@ type Caps struct {
 // ParseCaps parses "c:mp4,c:webm,v:h264,a:aac,..." as sent by the frontend.
 func ParseCaps(s string) Caps {
 	c := Caps{Containers: map[string]bool{}, Video: map[string]bool{}, Audio: map[string]bool{}}
-	for _, item := range strings.Split(s, ",") {
+	for item := range strings.SplitSeq(s, ",") {
 		kind, name, ok := strings.Cut(strings.TrimSpace(item), ":")
 		if !ok || len(name) > 16 {
 			continue

@@ -125,7 +125,7 @@ func health(cfg config.Config) error {
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
-	req, err := http.NewRequest("GET", "http://"+net.JoinHostPort(host, port)+"/api/health", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+net.JoinHostPort(host, port)+"/api/health", nil)
 	if err != nil {
 		return err
 	}

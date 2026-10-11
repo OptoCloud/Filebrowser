@@ -54,7 +54,7 @@ func TestTOTPRFC6238(t *testing.T) {
 func TestBackoff(t *testing.T) {
 	b := NewBackoff(3, time.Second, 10*time.Second, time.Hour)
 	now := time.Unix(1000, 0)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		b.Fail("k", now)
 	}
 	if b.Wait("k", now) != 0 {
@@ -64,7 +64,7 @@ func TestBackoff(t *testing.T) {
 	if w := b.Wait("k", now); w != time.Second {
 		t.Fatalf("wait = %v", w)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		b.Fail("k", now)
 	}
 	if w := b.Wait("k", now); w != 10*time.Second {

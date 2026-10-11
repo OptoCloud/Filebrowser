@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -22,6 +21,8 @@ var migrationsFS embed.FS
 var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
+	// ErrLastLogin refuses to remove a user's only way to log in.
+	ErrLastLogin = errors.New("last login method")
 )
 
 type Store struct {
@@ -71,11 +72,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := conn.QueryRow(ctx, `SELECT COALESCE(max(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
 		return err
 	}
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	entries, err := fs.ReadDir(migrationsFS, "migrations") // sorted by file name
 	if err != nil {
 		return err
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, e := range entries {
 		num, _, ok := strings.Cut(e.Name(), "_")
 		if !ok {
@@ -103,6 +103,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// queryOne scans the single row of a query into a T (columns in field
+// order), returning ErrNotFound if there is none.
+func queryOne[T any](ctx context.Context, s *Store, sql string, args ...any) (*T, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	v, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByPos[T])
+	return v, notFound(err)
+}
+
+// queryAll scans every row of a query into a T (columns in field order).
+func queryAll[T any](ctx context.Context, s *Store, sql string, args ...any) ([]*T, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[T])
+}
+
 func notFound(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
@@ -111,8 +131,8 @@ func notFound(err error) error {
 }
 
 func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "23505"
 }
 
 func affected(tag pgconn.CommandTag, err error) error {

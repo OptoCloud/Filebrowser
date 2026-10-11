@@ -33,20 +33,11 @@ func (s *Store) CreateInvite(ctx context.Context, inv *Invite) error {
 }
 
 func (s *Store) InviteByTokenHash(ctx context.Context, hash []byte) (*Invite, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+inviteCols+` FROM invites WHERE token_hash = $1`, hash)
-	if err != nil {
-		return nil, err
-	}
-	inv, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByPos[Invite])
-	return inv, notFound(err)
+	return queryOne[Invite](ctx, s, `SELECT `+inviteCols+` FROM invites WHERE token_hash = $1`, hash)
 }
 
 func (s *Store) Invites(ctx context.Context) ([]*Invite, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+inviteCols+` FROM invites ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[Invite])
+	return queryAll[Invite](ctx, s, `SELECT `+inviteCols+` FROM invites ORDER BY created_at DESC`)
 }
 
 func (s *Store) DeleteInvite(ctx context.Context, id int64) error {
@@ -105,28 +96,15 @@ func (s *Store) AddTrash(ctx context.Context, t *TrashItem) error {
 }
 
 func (s *Store) TrashItems(ctx context.Context, userID int64) ([]*TrashItem, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+trashCols+` FROM trash WHERE user_id = $1 ORDER BY trashed_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[TrashItem])
+	return queryAll[TrashItem](ctx, s, `SELECT `+trashCols+` FROM trash WHERE user_id = $1 ORDER BY trashed_at DESC`, userID)
 }
 
 func (s *Store) TrashItem(ctx context.Context, userID int64, id string) (*TrashItem, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+trashCols+` FROM trash WHERE user_id = $1 AND id = $2`, userID, id)
-	if err != nil {
-		return nil, err
-	}
-	t, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByPos[TrashItem])
-	return t, notFound(err)
+	return queryOne[TrashItem](ctx, s, `SELECT `+trashCols+` FROM trash WHERE user_id = $1 AND id = $2`, userID, id)
 }
 
 func (s *Store) TrashOlderThan(ctx context.Context, cutoff time.Time) ([]*TrashItem, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+trashCols+` FROM trash WHERE trashed_at < $1`, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[TrashItem])
+	return queryAll[TrashItem](ctx, s, `SELECT `+trashCols+` FROM trash WHERE trashed_at < $1`, cutoff)
 }
 
 func (s *Store) DeleteTrash(ctx context.Context, id string) error {
@@ -163,13 +141,8 @@ type MediaCacheEntry struct {
 const mediaCacheCols = `source_path, source_size, source_mtime, variant, cache_path, bytes, last_used_at`
 
 func (s *Store) MediaCache(ctx context.Context, path string, size, mtime int64, variant string) (*MediaCacheEntry, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+mediaCacheCols+` FROM media_cache
+	return queryOne[MediaCacheEntry](ctx, s, `SELECT `+mediaCacheCols+` FROM media_cache
 		WHERE source_path = $1 AND source_size = $2 AND source_mtime = $3 AND variant = $4`, path, size, mtime, variant)
-	if err != nil {
-		return nil, err
-	}
-	e, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByPos[MediaCacheEntry])
-	return e, notFound(err)
 }
 
 // PutMediaCache stores an entry and returns the previous cache path for the
@@ -207,11 +180,7 @@ func (s *Store) MediaCacheTotal(ctx context.Context) (int64, error) {
 }
 
 func (s *Store) MediaCacheLRU(ctx context.Context, limit int) ([]*MediaCacheEntry, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+mediaCacheCols+` FROM media_cache ORDER BY last_used_at LIMIT $1`, limit)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[MediaCacheEntry])
+	return queryAll[MediaCacheEntry](ctx, s, `SELECT `+mediaCacheCols+` FROM media_cache ORDER BY last_used_at LIMIT $1`, limit)
 }
 
 func (s *Store) DeleteMediaCache(ctx context.Context, path, variant string) error {
@@ -277,12 +246,8 @@ func (s *Store) Audit(ctx context.Context, q AuditQuery) ([]*AuditEntry, error) 
 	if q.Limit <= 0 || q.Limit > 500 {
 		q.Limit = 100
 	}
-	rows, err := s.pool.Query(ctx, `SELECT a.id, a.ts, a.user_id, u.username, a.ip, a.action, a.target, a.details_json
+	return queryAll[AuditEntry](ctx, s, `SELECT a.id, a.ts, a.user_id, u.username, a.ip, a.action, a.target, a.details_json
 		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
 		WHERE ($1 = 0 OR a.id < $1) AND ($2 = '' OR a.action LIKE $2 || '%') AND ($3 = 0 OR a.user_id = $3)
 		ORDER BY a.id DESC LIMIT $4`, q.BeforeID, q.Action, q.UserID, q.Limit)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[AuditEntry])
 }

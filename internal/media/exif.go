@@ -49,7 +49,7 @@ func tiffOrientation(t []byte) int {
 		return 1
 	}
 	count := int(bo.Uint16(t[off:]))
-	for i := 0; i < count; i++ {
+	for i := range count {
 		e := off + 2 + i*12
 		if e+12 > len(t) {
 			return 1
@@ -77,8 +77,8 @@ func orient(img *image.RGBA, o int) image.Image {
 		ow, oh = h, w
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, ow, oh))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			var dx, dy int
 			switch o {
 			case 2:

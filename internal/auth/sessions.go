@@ -61,15 +61,7 @@ func (m *Sessions) Create(ctx context.Context, w http.ResponseWriter, r *http.Re
 	if err := m.Store.CreateSession(ctx, sess); err != nil {
 		return nil, err
 	}
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 nosemgrep -- Secure is off only with dev = true (http://localhost)
-		Name:     m.CookieName(),
-		Value:    token,
-		Path:     "/",
-		Expires:  sess.ExpiresAt,
-		HttpOnly: true,
-		Secure:   m.Secure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	SetCookie(w, Cookie{Name: m.CookieName(), Value: token, Expires: sess.ExpiresAt, SameSite: http.SameSiteStrictMode}, m.Secure)
 	return sess, nil
 }
 
@@ -117,10 +109,7 @@ func (m *Sessions) Destroy(ctx context.Context, w http.ResponseWriter, r *http.R
 }
 
 func (m *Sessions) ClearCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 nosemgrep -- Secure is off only with dev = true (http://localhost)
-		Name: m.CookieName(), Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: m.Secure, SameSite: http.SameSiteStrictMode,
-	})
+	ClearCookie(w, m.CookieName(), m.Secure, http.SameSiteStrictMode)
 }
 
 // PublicID is the identifier shown to users for a session (hex of the hash).

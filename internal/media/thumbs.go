@@ -53,14 +53,14 @@ func (s *Service) Thumbnail(ctx context.Context, path string) (string, error) {
 	}
 	size, mtime := fi.Size(), fi.ModTime().UnixNano()
 	if p, err := s.store.Thumbnail(ctx, path, size, mtime); err == nil {
-		if _, err := os.Stat(p); err == nil {
+		if cached(p) {
 			return p, nil
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	key := cacheKey(path, fi, "thumb")
-	v, err, _ := s.thumbSF.Do(key, func() (any, error) {
+	return s.thumbs.do(ctx, key, func(ctx context.Context) (string, error) {
 		out, err := s.cachePath("thumbs", key, ".jpg")
 		if err != nil {
 			return "", err
@@ -79,10 +79,6 @@ func (s *Service) Thumbnail(ctx context.Context, path string) (string, error) {
 		}
 		return out, err
 	})
-	if err != nil {
-		return "", err
-	}
-	return v.(string), nil
 }
 
 func (s *Service) thumbImage(ctx context.Context, path, out string) error {
@@ -185,12 +181,11 @@ func (s *Service) thumbFFmpeg(ctx context.Context, path, out string, video bool)
 		tctx, cancel := context.WithTimeout(ctx, s.cfg.ProbeTimeout.Duration)
 		defer cancel()
 		cmd := s.runner.Command(tctx, "ffmpeg", in, jobDir, func(input string) []string {
-			args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}
+			var pre []string
 			if seek > 0 {
-				args = append(args, "-ss", strconv.FormatFloat(seek, 'f', 2, 64))
+				pre = []string{"-ss", strconv.FormatFloat(seek, 'f', 2, 64)}
 			}
-			args = append(args, inputArgs(input)...)
-			return append(args, "-map", "0:v:0", "-frames:v", "1",
+			return append(ffmpegArgs(input, pre...), "-map", "0:v:0", "-frames:v", "1",
 				// Fit within the box without upscaling.
 				"-vf", fmt.Sprintf("scale='min(%d,iw)':'min(%d,ih)':force_original_aspect_ratio=decrease", thumbSize, thumbSize),
 				"-f", "image2", "-c:v", "mjpeg", "-q:v", "4", tmp)

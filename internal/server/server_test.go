@@ -281,7 +281,7 @@ func TestLoginBackoff(t *testing.T) {
 	h.user("bob", "user")
 	c := h.app()
 	var last int
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		last = c.do("POST", "/api/auth/login", map[string]string{"username": "bob", "password": "nope nope nope"}).Code
 	}
 	if last != http.StatusTooManyRequests {

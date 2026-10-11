@@ -74,45 +74,47 @@ func (s *Service) Subtitle(ctx context.Context, srcPath string, track int) (stri
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(out); err == nil {
+	if cached(out) {
 		return out, nil
 	}
-	_, err, _ = s.subSF.Do(key, func() (any, error) {
+	return s.subs.do(ctx, key, func(ctx context.Context) (string, error) {
 		release, err := s.runner.AcquireLight(ctx)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		defer release()
 		in, _, err := s.open(srcPath)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		defer in.File.Close()
 		tctx, cancel := context.WithTimeout(ctx, s.cfg.ProbeTimeout.Duration*4)
 		defer cancel()
 		jobDir, done, err := s.jobDir()
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		defer done()
 		tmp := filepath.Join(jobDir, "out.vtt")
 		cmd := s.runner.Command(tctx, "ffmpeg", in, jobDir, func(input string) []string {
-			args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}, inputArgs(input)...)
+			args := ffmpegArgs(input)
 			if track >= 0 {
 				args = append(args, "-map", "0:"+strconv.Itoa(track))
 			}
 			return append(args, "-c:s", "webvtt", "-f", "webvtt", tmp)
 		})
 		if _, err := run(cmd); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrConvert, err)
+			return "", fmt.Errorf("%w: %v", ErrConvert, err)
 		}
-		return nil, publish(tmp, out, func(f *os.File) error {
+		if err := publish(tmp, out, func(f *os.File) error {
 			head := make([]byte, 6)
 			if _, err := io.ReadFull(f, head); err != nil || string(head) != "WEBVTT" {
 				return errors.New("not WebVTT")
 			}
 			return nil
-		})
+		}); err != nil {
+			return "", err
+		}
+		return out, nil
 	})
-	return out, err
 }

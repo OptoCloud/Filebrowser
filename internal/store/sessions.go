@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type Session struct {
@@ -29,12 +27,7 @@ func (s *Store) CreateSession(ctx context.Context, sess *Session) error {
 }
 
 func (s *Store) SessionByHash(ctx context.Context, hash []byte) (*Session, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+sessionCols+` FROM sessions WHERE id_hash = $1`, hash)
-	if err != nil {
-		return nil, err
-	}
-	sess, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByPos[Session])
-	return sess, notFound(err)
+	return queryOne[Session](ctx, s, `SELECT `+sessionCols+` FROM sessions WHERE id_hash = $1`, hash)
 }
 
 func (s *Store) TouchSession(ctx context.Context, hash []byte, at time.Time) error {
@@ -60,11 +53,7 @@ func (s *Store) DeleteUserSessions(ctx context.Context, userID int64, keep []byt
 }
 
 func (s *Store) UserSessions(ctx context.Context, userID int64) ([]*Session, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+sessionCols+` FROM sessions WHERE user_id = $1 ORDER BY last_seen_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[Session])
+	return queryAll[Session](ctx, s, `SELECT `+sessionCols+` FROM sessions WHERE user_id = $1 ORDER BY last_seen_at DESC`, userID)
 }
 
 type SessionWithUser struct {

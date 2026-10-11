@@ -14,6 +14,7 @@ import (
 
 	"filebrowser/internal/auth"
 	"filebrowser/internal/files"
+	"filebrowser/internal/httpx"
 	"filebrowser/internal/store"
 )
 
@@ -137,11 +138,10 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 	if err != nil || owner.Disabled {
 		return nil, ErrInvalid
 	}
-	grants, err := s.Store.Grants(ctx, owner.ID)
+	a, err := files.AccessFor(ctx, s.Store, owner)
 	if err != nil {
 		return nil, err
 	}
-	a := &files.Access{Admin: owner.IsAdmin(), Grants: grants}
 	want := files.PermRead
 	if sh.Kind == "upload" {
 		want = files.PermWrite
@@ -229,15 +229,12 @@ func (s *Service) Unlock(w http.ResponseWriter, sh *store.Share, password string
 	}
 	exp := min(time.Now().Add(12*time.Hour).Unix(), sh.ExpiresAt.Unix())
 	sig := s.Keys.Sign("share-unlock", s.unlockMsg(sh, exp))
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 nosemgrep -- Secure is off only with dev = true (http://localhost)
+	auth.SetCookie(w, auth.Cookie{
 		Name:     s.unlockCookieName(sh.ID),
 		Value:    strconv.FormatInt(exp, 10) + "." + base64.RawURLEncoding.EncodeToString(sig),
-		Path:     "/",
 		Expires:  time.Unix(exp, 0),
-		HttpOnly: true,
-		Secure:   s.Secure,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}, s.Secure)
 	return true
 }
 
@@ -283,19 +280,7 @@ func (s *Service) VerifyLink(tok string) (*Link, error) {
 // LinkURL builds the public URL for a signed link; the file name is appended
 // so external players show a sensible title.
 func (s *Service) LinkURL(l Link, name string) string {
-	return s.ShareOrigin + "/x/" + s.SignLink(l) + "/" + pathEscape(name)
-}
-
-func pathEscape(s string) string {
-	var b strings.Builder
-	for _, c := range []byte(s) {
-		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("-._~", c) >= 0 {
-			b.WriteByte(c)
-		} else {
-			fmt.Fprintf(&b, "%%%02X", c)
-		}
-	}
-	return b.String()
+	return s.ShareOrigin + "/x/" + s.SignLink(l) + "/" + httpx.PathEscape(name)
 }
 
 func (s *Service) countedCookieName(id int64) string {
@@ -318,8 +303,8 @@ func (s *Service) Counted(r *http.Request, sh *store.Share) bool {
 // MarkCounted records that this browser has used a download of sh.
 func (s *Service) MarkCounted(w http.ResponseWriter, sh *store.Share) {
 	sig := s.Keys.Sign("share-counted", []byte(strconv.FormatInt(sh.ID, 10)))
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 nosemgrep -- Secure is off only with dev = true (http://localhost)
-		Name: s.countedCookieName(sh.ID), Value: base64.RawURLEncoding.EncodeToString(sig), Path: "/",
-		Expires: sh.ExpiresAt, HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode,
-	})
+	auth.SetCookie(w, auth.Cookie{
+		Name: s.countedCookieName(sh.ID), Value: base64.RawURLEncoding.EncodeToString(sig),
+		Expires: sh.ExpiresAt, SameSite: http.SameSiteLaxMode,
+	}, s.Secure)
 }

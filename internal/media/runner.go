@@ -214,6 +214,13 @@ func inputOpts(input string) []string {
 	return []string{"-protocol_whitelist", "file", "-format_whitelist", demuxers}
 }
 
+// ffmpegArgs starts an ffmpeg command line: quiet, non-interactive, allowed
+// to overwrite its (private) output, with pre (e.g. a seek) before the input.
+func ffmpegArgs(input string, pre ...string) []string {
+	args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}, pre...)
+	return append(args, inputArgs(input)...)
+}
+
 // inputArgs is inputOpts plus the decoder whitelist, for ffmpeg.
 func inputArgs(input string) []string {
 	return append(inputOpts(input), "-codec_whitelist", decoders, "-i", input)

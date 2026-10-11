@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -153,12 +154,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"totp_required": true, "token": s.pending.add(user.ID, "password")})
 		return
 	}
-	if _, err := s.sessions.Create(ctx, w, r, user.ID, "password", false, httpx.IP(ctx)); err != nil {
-		httpx.InternalError(w, r, err)
-		return
+	if s.startSession(w, r, user.ID, "password", false) {
+		s.audit.LogUser(ctx, &user.ID, audit.LoginOK, user.Username, map[string]any{"method": "password"})
+		httpx.OK(w)
 	}
-	s.audit.LogUser(ctx, &user.ID, audit.LoginOK, user.Username, map[string]any{"method": "password"})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// startSession creates a session (replacing any presented in r), writing a
+// 500 response on failure.
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID int64, method string, mfa bool) bool {
+	if _, err := s.sessions.Create(r.Context(), w, r, userID, method, mfa, httpx.IP(r.Context())); err != nil {
+		httpx.InternalError(w, r, err)
+		return false
+	}
+	return true
+}
+
+// rotateSessions ends all of the user's sessions and starts a new one for
+// this client, after a change in privilege or credentials.
+func (s *Server) rotateSessions(w http.ResponseWriter, r *http.Request, id *httpx.Identity, mfa bool) bool {
+	if _, err := s.store.DeleteUserSessions(r.Context(), id.User.ID, nil); err != nil {
+		httpx.InternalError(w, r, err)
+		return false
+	}
+	return s.startSession(w, r, id.User.ID, id.Session.AuthMethod, mfa)
 }
 
 // verifyTOTP checks a code against the user's secret with replay protection.
@@ -194,7 +213,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
 		return
 	}
-	key := "totp:" + strconv.FormatInt(pl.userID, 10)
+	key := userKey("totp", pl.userID)
 	if d := s.totpBackoff.Wait(key, time.Now()); d > 0 {
 		retryAfter(w, d)
 		return
@@ -213,18 +232,17 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.totpBackoff.Reset(key)
 	s.pending.done(req.Token)
-	if _, err := s.sessions.Create(ctx, w, r, user.ID, pl.method, true, httpx.IP(ctx)); err != nil {
-		httpx.InternalError(w, r, err)
+	if !s.startSession(w, r, user.ID, pl.method, true) {
 		return
 	}
 	s.audit.LogUser(ctx, &user.ID, audit.LoginOK, user.Username, map[string]any{"method": pl.method, "totp": true})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.sessions.Destroy(r.Context(), w, r)
 	s.audit.Log(r.Context(), audit.Logout, "", nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +254,7 @@ func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions.ClearCookie(w)
 	s.audit.Log(r.Context(), audit.LogoutAll, "", map[string]any{"sessions": n})
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +321,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "two-factor authentication is already enabled")
 		return
 	}
-	key := "totp:" + strconv.FormatInt(id.User.ID, 10)
+	key := userKey("totp", id.User.ID)
 	if d := s.totpBackoff.Wait(key, time.Now()); d > 0 {
 		retryAfter(w, d)
 		return
@@ -328,16 +346,11 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Privilege change: rotate the session and drop all others.
-	if _, err := s.store.DeleteUserSessions(ctx, id.User.ID, id.Session.IDHash); err != nil {
-		httpx.InternalError(w, r, err)
-		return
-	}
-	if _, err := s.sessions.Create(ctx, w, r, id.User.ID, id.Session.AuthMethod, true, httpx.IP(ctx)); err != nil {
-		httpx.InternalError(w, r, err)
+	if !s.rotateSessions(w, r, id, true) {
 		return
 	}
 	s.audit.Log(ctx, audit.TOTPEnabled, id.User.Username, nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
@@ -355,19 +368,33 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !id.User.TOTPEnabled() {
-		httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+		httpx.OK(w)
 		return
 	}
-	if (id.User.PasswordHash != "" && !auth.VerifyPassword(id.User.PasswordHash, req.Password)) || !s.verifyTOTP(r, id.User, req.Code) {
+	// Same limits as password change and TOTP entry: a session alone must not
+	// allow unthrottled guessing of the password or the code.
+	pwKey, totpKey := userKey("pw", id.User.ID), userKey("totp", id.User.ID)
+	if d := max(s.loginBackoff.Wait(pwKey, time.Now()), s.totpBackoff.Wait(totpKey, time.Now())); d > 0 {
+		retryAfter(w, d)
+		return
+	}
+	if id.User.PasswordHash != "" && !auth.VerifyPassword(id.User.PasswordHash, req.Password) {
+		s.loginBackoff.Fail(pwKey, time.Now())
 		httpx.Error(w, http.StatusUnauthorized, "invalid password or code")
 		return
 	}
+	if !s.verifyTOTP(r, id.User, req.Code) {
+		s.totpBackoff.Fail(totpKey, time.Now())
+		httpx.Error(w, http.StatusUnauthorized, "invalid password or code")
+		return
+	}
+	s.totpBackoff.Reset(totpKey)
 	if err := s.store.DisableTOTP(ctx, id.User.ID); err != nil {
 		httpx.InternalError(w, r, err)
 		return
 	}
 	s.audit.Log(ctx, audit.TOTPDisabled, id.User.Username, nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -381,7 +408,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	id := httpx.IdentityFrom(ctx)
-	key := "pw:" + strconv.FormatInt(id.User.ID, 10)
+	key := userKey("pw", id.User.ID)
 	if d := s.loginBackoff.Wait(key, time.Now()); d > 0 {
 		retryAfter(w, d)
 		return
@@ -419,16 +446,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, r, err)
 		return
 	}
-	if _, err := s.store.DeleteUserSessions(ctx, id.User.ID, nil); err != nil {
-		httpx.InternalError(w, r, err)
-		return
-	}
-	if _, err := s.sessions.Create(ctx, w, r, id.User.ID, id.Session.AuthMethod, id.Session.MFA, httpx.IP(ctx)); err != nil {
-		httpx.InternalError(w, r, err)
+	if !s.rotateSessions(w, r, id, id.Session.MFA) {
 		return
 	}
 	s.audit.Log(ctx, audit.PasswordChanged, id.User.Username, nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 type sessionView struct {
@@ -448,7 +470,7 @@ func (s *Server) handleMySessions(w http.ResponseWriter, r *http.Request) {
 	out := make([]sessionView, 0, len(list))
 	for _, sess := range list {
 		out = append(out, sessionView{ID: auth.PublicID(sess.IDHash), Session: sess,
-			Current: string(sess.IDHash) == string(id.Session.IDHash)})
+			Current: bytes.Equal(sess.IDHash, id.Session.IDHash)})
 	}
 	httpx.JSON(w, http.StatusOK, out)
 }
@@ -464,7 +486,7 @@ func (s *Server) handleDeleteMySession(w http.ResponseWriter, r *http.Request) {
 		httpx.FileError(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 // OIDC
@@ -529,8 +551,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?totp="+url.QueryEscape(tok), http.StatusFound)
 		return
 	}
-	if _, err := s.sessions.Create(ctx, w, r, user.ID, "oidc", trust, httpx.IP(ctx)); err != nil {
-		httpx.InternalError(w, r, err)
+	if !s.startSession(w, r, user.ID, "oidc", trust) {
 		return
 	}
 	s.audit.LogUser(ctx, &user.ID, audit.OIDCLogin, target, nil)
@@ -546,12 +567,16 @@ func (s *Server) handleOIDCUnlink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := httpx.IdentityFrom(r.Context())
-	if err := s.store.UnlinkOIDC(r.Context(), id.User.ID, req.Issuer, req.Subject); err != nil {
+	err := s.store.UnlinkOIDC(r.Context(), id.User.ID, req.Issuer, req.Subject)
+	if errors.Is(err, store.ErrLastLogin) {
+		httpx.ErrorCode(w, http.StatusConflict, "last_login_method", "set a password before unlinking your only login provider")
+		return
+	} else if err != nil {
 		httpx.FileError(w, r, err)
 		return
 	}
 	s.audit.Log(r.Context(), audit.OIDCUnlinked, req.Issuer+" "+req.Subject, nil)
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	httpx.OK(w)
 }
 
 // Invites
@@ -621,11 +646,9 @@ func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.LogUser(ctx, &user.ID, audit.InviteAccepted, user.Username, map[string]any{"invite_id": inv.ID})
-	if _, err := s.sessions.Create(ctx, w, r, user.ID, "invite", false, httpx.IP(ctx)); err != nil {
-		httpx.InternalError(w, r, err)
-		return
+	if s.startSession(w, r, user.ID, "invite", false) {
+		httpx.OK(w)
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // validGrantPath cleans an admin-supplied grant path. The whole tree must be

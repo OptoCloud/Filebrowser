@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type Share struct {
@@ -31,39 +29,17 @@ func (s *Store) CreateShare(ctx context.Context, sh *Share) error {
 	).Scan(&sh.ID, &sh.CreatedAt)
 }
 
-func (s *Store) shareQuery(ctx context.Context, where string, args ...any) ([]*Share, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+shareCols+` FROM shares `+where, args...)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToAddrOfStructByPos[Share])
-}
-
 func (s *Store) ShareByTokenHash(ctx context.Context, hash []byte) (*Share, error) {
-	out, err := s.shareQuery(ctx, `WHERE token_hash = $1`, hash)
-	if err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, ErrNotFound
-	}
-	return out[0], nil
+	return queryOne[Share](ctx, s, `SELECT `+shareCols+` FROM shares WHERE token_hash = $1`, hash)
 }
 
 func (s *Store) ShareByID(ctx context.Context, id int64) (*Share, error) {
-	out, err := s.shareQuery(ctx, `WHERE id = $1`, id)
-	if err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, ErrNotFound
-	}
-	return out[0], nil
+	return queryOne[Share](ctx, s, `SELECT `+shareCols+` FROM shares WHERE id = $1`, id)
 }
 
 // Shares lists shares; ownerID 0 lists all.
 func (s *Store) Shares(ctx context.Context, ownerID int64) ([]*Share, error) {
-	return s.shareQuery(ctx, `WHERE ($1 = 0 OR owner_id = $1) ORDER BY created_at DESC`, ownerID)
+	return queryAll[Share](ctx, s, `SELECT `+shareCols+` FROM shares WHERE ($1 = 0 OR owner_id = $1) ORDER BY created_at DESC`, ownerID)
 }
 
 func (s *Store) RevokeShare(ctx context.Context, id int64, at time.Time) error {

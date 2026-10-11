@@ -16,8 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"filebrowser/internal/config"
 	"filebrowser/internal/files"
 	"filebrowser/internal/store"
@@ -31,14 +29,15 @@ type Service struct {
 	cacheDir  string
 	runner    *Runner
 
-	probeSF singleflight.Group
-	thumbSF singleflight.Group
-	subSF   singleflight.Group
+	probes flights[*Probe]
+	thumbs flights[string]
+	subs   flights[string]
 	// thumbSem bounds pure-Go image decoding (memory heavy).
 	thumbSem chan struct{}
 
-	jobsMu sync.Mutex
-	jobs   map[string]*Job
+	jobsMu         sync.Mutex
+	jobs           map[string]*Job
+	lastStaleEvict time.Time
 }
 
 func NewService(cfg config.Media, st *store.Store, fsys *files.FS, filesRoot, cacheDir string) (*Service, error) {
@@ -86,7 +85,7 @@ func (s *Service) SelfTest(ctx context.Context) error {
 
 func hasInputProtocol(list, name string) bool {
 	in := false
-	for _, line := range strings.Split(list, "\n") {
+	for line := range strings.SplitSeq(list, "\n") {
 		switch line = strings.TrimSpace(line); line {
 		case "Input:":
 			in = true
@@ -275,7 +274,7 @@ func (s *Service) runJob(j *Job, in *Input, fi fs.FileInfo, probe *Probe, spec v
 		}
 	}
 	cmd := s.runner.Command(ctx, "ffmpeg", in, jobDir, func(input string) []string {
-		args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}, inputArgs(input)...)
+		args := ffmpegArgs(input)
 		if video != nil {
 			args = append(args, "-map", "0:"+strconv.Itoa(video.Index), "-c:v", "copy")
 			if video.Codec == "hevc" {
@@ -363,8 +362,9 @@ func (s *Service) OpenVariant(ctx context.Context, path, variant string) (*os.Fi
 }
 
 // Evict deletes least recently used variants until the cache fits its cap,
-// and forgets finished job records.
+// stale thumbnails and subtitles, and forgets finished job records.
 func (s *Service) Evict(ctx context.Context) {
+	s.evictStale()
 	s.jobsMu.Lock()
 	for k, j := range s.jobs {
 		if !j.finished.IsZero() && time.Since(j.finished) > 10*time.Minute {
