@@ -221,7 +221,7 @@ func (s *Server) handlePreviewURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := httpx.IdentityFrom(r.Context())
-	link := shares.Link{UserID: id.User.ID, Path: p, Inline: true, Expires: time.Now().Add(30 * time.Minute).Unix()}
+	link := shares.Link{UserID: id.User.ID, Session: id.Session.IDHash, Path: p, Inline: true, Expires: time.Now().Add(30 * time.Minute).Unix()}
 	httpx.JSON(w, http.StatusOK, map[string]any{"url": s.shares.LinkURL(link, fi.Name())})
 }
 

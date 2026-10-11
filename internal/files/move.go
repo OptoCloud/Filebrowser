@@ -104,6 +104,11 @@ func (f *FS) Move(from, to string) error {
 	return nil
 }
 
+// FileID identifies the file or folder at the real path p independently of
+// its name, so callers can tell when something else has replaced it. It is ""
+// where the platform offers no such identity.
+func (f *FS) FileID(p string) (string, error) { return f.fileID(p) }
+
 // absent returns ErrExists if p exists (as any kind of entry, even a dangling symlink).
 func (f *FS) absent(p string) error {
 	if _, err := f.root.Lstat(osPath(p)); err == nil {
@@ -196,6 +201,21 @@ func newID() string { return auth.NewToken(12) }
 
 // hasReserved reports whether any component of the cleaned path p is Reserved.
 func hasReserved(p string) bool {
-	return p == Reserved || strings.HasPrefix(p, Reserved+"/") ||
-		strings.HasSuffix(p, "/"+Reserved) || strings.Contains(p, "/"+Reserved+"/")
+	for c := range strings.SplitSeq(p, "/") {
+		if IsReservedName(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// aliasesReserved reports whether fi, the entry name in dir, is dir's
+// Reserved directory under another name (a Windows 8.3 short name such as
+// FILEBR~1).
+func (f *FS) aliasesReserved(dir, name string, fi fs.FileInfo) bool {
+	if !strings.Contains(name, "~") || !fi.IsDir() {
+		return false
+	}
+	rfi, err := f.root.Lstat(osPath(Join(dir, Reserved)))
+	return err == nil && os.SameFile(fi, rfi)
 }

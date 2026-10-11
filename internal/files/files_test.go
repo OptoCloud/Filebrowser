@@ -267,7 +267,8 @@ func TestMoveAcrossFilesystems(t *testing.T) {
 			t.Fatalf("known=%v: mtime not preserved: %v", known, fi.ModTime())
 		}
 		if links {
-			if target, err := os.Readlink(filepath.Join(dir, "b", "tree", "link")); err != nil || target != "sub/f.txt" {
+			// Windows stores the target with its own separator.
+			if target, err := os.Readlink(filepath.Join(dir, "b", "tree", "link")); err != nil || filepath.ToSlash(target) != "sub/f.txt" {
 				t.Fatalf("known=%v: symlink = %q, %v", known, target, err)
 			}
 		}
@@ -305,5 +306,61 @@ func TestDeleteRestoreAcrossFilesystems(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "share", "doc.txt")); string(got) != "d" {
 		t.Fatalf("restored content = %q", got)
+	}
+}
+
+// Case-insensitive filesystems and Windows resolve other spellings of the
+// reserved directory to it (GHSA-fgm5-pw99-w2p7 class).
+func TestReservedAliasesRejected(t *testing.T) {
+	f, dir := newFS(t)
+	os.WriteFile(filepath.Join(dir, Reserved, "trash", "x.txt"), []byte("trashed"), 0o644)
+	for _, p := range []string{".FILEBROWSER/trash/x.txt", ".filebrowser./trash/x.txt", ".FileBrowser ./trash", "a/.FILEBROWSER"} {
+		if _, err := Clean(p); err == nil {
+			t.Errorf("Clean(%q) accepted", p)
+		}
+	}
+	for _, n := range []string{".FILEBROWSER", ".filebrowser.", ".filebrowser "} {
+		if ValidName(n) == nil {
+			t.Errorf("ValidName(%q) accepted", n)
+		}
+	}
+	// Windows 8.3 short name, where the filesystem generates them.
+	short := "FILEBR~1"
+	if _, err := os.Stat(filepath.Join(dir, short, "trash", "x.txt")); err != nil {
+		t.Logf("no 8.3 alias on this filesystem: %v", err)
+		return
+	}
+	admin := &Access{Admin: true}
+	if _, err := f.Authorize(admin, short+"/trash/x.txt", PermRead); !errors.Is(err, ErrForbidden) {
+		t.Errorf("Authorize through 8.3 alias: %v", err)
+	}
+	if _, err := f.AuthorizeEntry(admin, short, PermWrite); !errors.Is(err, ErrForbidden) {
+		t.Errorf("AuthorizeEntry on 8.3 alias: %v", err)
+	}
+}
+
+func TestFileIDFollowsTheFileNotThePath(t *testing.T) {
+	f, dir := newFS(t)
+	os.MkdirAll(filepath.Join(dir, "d"), 0o755)
+	os.WriteFile(filepath.Join(dir, "d", "a.txt"), []byte("a"), 0o644)
+	for _, p := range []string{"d", "d/a.txt"} {
+		id, err := f.FileID(p)
+		if err != nil {
+			t.Fatalf("FileID(%q): %v", p, err)
+		}
+		if again, _ := f.FileID(p); again != id {
+			t.Fatalf("FileID(%q) not stable: %q vs %q", p, id, again)
+		}
+	}
+	before, _ := f.FileID("d/a.txt")
+	if err := f.Move("d/a.txt", "d/b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := f.FileID("d/b.txt"); after != before {
+		t.Errorf("rename changed the identity: %q vs %q", before, after)
+	}
+	os.WriteFile(filepath.Join(dir, "d", "a.txt"), []byte("new"), 0o644)
+	if replaced, _ := f.FileID("d/a.txt"); before != "" && replaced == before {
+		t.Errorf("a new file at the old path has the old identity %q", replaced)
 	}
 }

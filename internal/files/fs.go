@@ -153,7 +153,7 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 	out := make([]Entry, 0, len(des))
 	for _, de := range des {
 		name := de.Name()
-		if name == Reserved {
+		if IsReservedName(name) {
 			continue
 		}
 		if allowed != nil && !allowed[name] {
@@ -203,7 +203,7 @@ func (f *FS) MkdirAll(p string) error {
 }
 
 func (f *FS) RemoveAll(p string) error {
-	if p == "" || p == Reserved {
+	if p == "" || IsReservedName(p) {
 		return ErrForbidden
 	}
 	return mapErr(f.root.RemoveAll(osPath(p)))
@@ -240,7 +240,7 @@ func (f *FS) Size(p string) (int64, error) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && d.Name() == Reserved {
+		if d.IsDir() && IsReservedName(d.Name()) {
 			return fs.SkipDir
 		}
 		if d.Type().IsRegular() {

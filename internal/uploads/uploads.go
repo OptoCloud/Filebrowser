@@ -140,7 +140,7 @@ func (u *Uploads) reserve(ev tushandler.HookEvent, a *files.Access, userID, quot
 		return "", reject(http.StatusBadRequest, "upload length required")
 	}
 	id := auth.NewToken(16)
-	if !u.files.Reserve(id, userID, a, ev.Upload.Size, quota) {
+	if !u.files.Reserve(ev.Context, id, userID, a, ev.Upload.Size, quota) {
 		return "", reject(http.StatusRequestEntityTooLarge, "quota exceeded")
 	}
 	return id, nil
@@ -298,7 +298,7 @@ func (u *Uploads) withShare(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		res, err := u.shares.Resolve(r.Context(), r.Header.Get(ShareHeader))
 		if errors.Is(err, shares.ErrInvalid) || (err == nil && res.Share.Kind != "upload") {
-			if u.failedLookup != nil && !u.failedLookup(httpx.IP(r.Context())) {
+			if u.failedLookup != nil && !u.failedLookup(httpx.LimitKey(r.Context())) {
 				w.Header().Set("Retry-After", "60")
 				httpx.Error(w, http.StatusTooManyRequests, "too many attempts, try again later")
 				return

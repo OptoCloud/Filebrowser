@@ -3,6 +3,7 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
 	"time"
 
@@ -67,6 +68,9 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 
 func (s *Server) withIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.TrustedIPHeader == "" && !s.cfg.Dev {
+			s.warnIfProxied(r)
+		}
 		ip := httpx.ClientIP(r, s.cfg.TrustedIPHeader, s.proxies)
 		next.ServeHTTP(w, r.WithContext(httpx.WithIP(r.Context(), ip)))
 	})
@@ -82,7 +86,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
-		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 		if !s.cfg.Dev {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
@@ -109,5 +113,21 @@ func (s *Server) csrf(origin string, next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// warnIfProxied warns once when requests arrive from a private or loopback
+// address without trusted_ip_header: behind a reverse proxy or tunnel every
+// client then shares the proxy's address and its rate limits, so a few failed
+// logins from anyone would throttle everyone.
+func (s *Server) warnIfProxied(r *http.Request) {
+	peer, err := netip.ParseAddr(httpx.PeerAddr(r))
+	if err != nil || !(peer.IsLoopback() || peer.IsPrivate()) {
+		return
+	}
+	s.proxyWarning.Do(func() {
+		slog.Warn("requests come from a proxy but trusted_ip_header is not set; all clients share one address "+
+			"for rate limiting and audit logs. Set trusted_ip_header (and trusted_proxies) for your proxy or tunnel.",
+			"peer", peer.String())
 	})
 }

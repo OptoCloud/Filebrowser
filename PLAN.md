@@ -217,3 +217,7 @@ Targets: Proxmox LXC (primary), Docker and Windows; see deploy/README.md. All th
 4. Library profile: run an ffprobe scan to count files per media bucket (direct / remux / audio transcode / full transcode).
 5. Domain names for the app and share origins.
 6. Are upload-only "drop" links wanted in v1?
+
+## Deferred
+
+- **Mandatory release signatures** (deferred 2026-10-11). Releases are unsigned today: the `RELEASE_SSH_KEY` secret is not set and v0.1.0 has no `SHA256SUMS.sig`, so the updaters (`deploy/lxc/filebrowser-update`, `deploy/windows/update.ps1`) verify checksums from the same release, which proves integrity but not authenticity. To do: create a dedicated ed25519 release key, store it as `RELEASE_SSH_KEY`, commit the public key as `deploy/release_signers`, make `release.yml` fail without the secret, have `install.sh`/`install.ps1` install the signers file, and make the updaters refuse releases without a valid signature.

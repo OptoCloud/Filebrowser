@@ -40,7 +40,7 @@
     fatal = '';
     try {
       info = await get<ShareInfo>(base + '/api/info');
-      if (info.kind === 'upload' && !uploader) {
+      if (info.unlocked && info.kind === 'upload' && !uploader) {
         uploader = new Uploader('/_upload/', { 'X-Share-Token': token });
       }
     } catch (e) {
@@ -161,8 +161,8 @@
   {:else if !unlocked}
     <div class="card center narrow">
       <Icon name="lock" size={40} />
-      <h1>{info.name}</h1>
-      <p class="muted">This link is password protected.</p>
+      <h1>Password protected</h1>
+      <p class="muted">Enter the password you were given to open this link.</p>
       <form onsubmit={unlock}>
         <!-- svelte-ignore a11y_autofocus -->
         <input

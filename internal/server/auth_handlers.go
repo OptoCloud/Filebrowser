@@ -115,8 +115,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	// Hard backoff per IP and per IP+account. The account-wide limit is soft
 	// (short cap) so that failures from elsewhere cannot lock the owner out.
-	ipKey := "ip:" + httpx.IP(ctx)
-	pairKey := "ipuser:" + httpx.IP(ctx) + "|" + strings.ToLower(req.Username)
+	ipKey := "ip:" + httpx.LimitKey(ctx)
+	pairKey := "ipuser:" + httpx.LimitKey(ctx) + "|" + strings.ToLower(req.Username)
 	userKey := "user:" + strings.ToLower(req.Username)
 	if d := max(s.loginBackoff.Wait(ipKey, now), s.loginBackoff.Wait(pairKey, now), s.accountBackoff.Wait(userKey, now)); d > 0 {
 		retryAfter(w, d)
@@ -277,7 +277,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"share_origin":  s.cfg.ShareOrigin,
 	}
 	if id.User.QuotaBytes > 0 {
-		resp["usage_bytes"] = s.files.Usage(id.User.ID, id.Access)
+		resp["usage_bytes"] = s.files.Usage(r.Context(), id.User.ID, id.Access)
 	}
 	httpx.JSON(w, http.StatusOK, resp)
 }
@@ -582,7 +582,7 @@ func (s *Server) handleOIDCUnlink(w http.ResponseWriter, r *http.Request) {
 // Invites
 
 func (s *Server) lookupInvite(w http.ResponseWriter, r *http.Request, token string) *store.Invite {
-	if !s.inviteLimit.Allow(httpx.IP(r.Context()), time.Now()) {
+	if !s.inviteLimit.Allow(httpx.LimitKey(r.Context()), time.Now()) {
 		retryAfter(w, time.Minute)
 		return nil
 	}

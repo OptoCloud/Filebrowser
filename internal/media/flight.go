@@ -2,6 +2,9 @@ package media
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 )
 
@@ -34,7 +37,7 @@ func (g *flights[T]) do(ctx context.Context, key string, fn func(context.Context
 		f = &flight[T]{done: make(chan struct{}), cancel: cancel}
 		g.m[key] = f
 		go func() {
-			f.val, f.err = fn(fctx)
+			f.val, f.err = guard(func() (T, error) { return fn(fctx) })
 			cancel()
 			g.forget(key, f)
 			close(f.done)
@@ -59,6 +62,19 @@ func (g *flights[T]) do(ctx context.Context, key string, fn func(context.Context
 		var zero T
 		return zero, ctx.Err()
 	}
+}
+
+// guard runs fn, turning a panic into an error: background work has no
+// request recoverer above it, and one decoder bug triggered by a hostile file
+// must not take the whole server down.
+func guard[T any](fn func() (T, error)) (v T, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("panic in media work", "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("%w: internal error", ErrConvert)
+		}
+	}()
+	return fn()
 }
 
 func (g *flights[T]) forget(key string, f *flight[T]) {

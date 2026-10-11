@@ -381,5 +381,5 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, list)
 }
 
-// auditActionRe matches action prefixes like "auth." (no LIKE wildcards).
+// auditActionRe matches action prefixes like "auth."
 var auditActionRe = regexp.MustCompile(`^[a-z0-9_.]{0,64}$`)

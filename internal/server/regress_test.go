@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -227,4 +228,98 @@ func TestTOTPDisableIsThrottled(t *testing.T) {
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("status after repeated failures = %d, want 429", last)
 	}
+}
+
+// Fixes from the CVE review (2026-10).
+
+// A locked share reveals nothing; weak passwords are refused; guessing is
+// limited per share as well as per client.
+func TestShareLockAndPasswordRules(t *testing.T) {
+	h := newHarness(t)
+	h.user("eve", "user", store.Grant{Path: "eve", Permission: "write"})
+	write(t, h.root, "eve/secret-plans.pdf", "%PDF")
+	c := h.login("eve")
+	rec := c.do("POST", "/api/shares", map[string]any{"path": "eve/secret-plans.pdf", "password": "1234"})
+	expect(t, rec, 400)
+	if !strings.Contains(rec.Body.String(), "8 to 256 characters") {
+		t.Errorf("weak password error: %s", rec.Body.String())
+	}
+	created := decode[map[string]any](t, c.do("POST", "/api/shares", map[string]any{"path": "eve/secret-plans.pdf", "password": "long enough pw"}))
+	token := strings.TrimPrefix(created["url"].(string), shareOrigin+"/s/")
+	info := h.share().do("GET", "/s/"+token+"/api/info", nil)
+	if strings.Contains(info.Body.String(), "secret-plans") || strings.Contains(info.Body.String(), "expires") {
+		t.Errorf("locked share info leaks metadata: %s", info.Body.String())
+	}
+	// Guesses from many clients hit the per-share limit.
+	var last int
+	for i := range 14 {
+		s := h.share()
+		s.ip = "198.51.100." + strconv.Itoa(i+1)
+		last = s.do("POST", "/s/"+token+"/api/unlock", map[string]string{"password": "guess " + strconv.Itoa(i)}).Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Errorf("distributed guessing not limited per share: last status %d", last)
+	}
+}
+
+// A share stops working when its file is replaced by another one at the same path.
+func TestShareBoundToFileIdentity(t *testing.T) {
+	h := newHarness(t)
+	h.user("fay", "user", store.Grant{Path: "fay", Permission: "write"})
+	write(t, h.root, "fay/report.txt", "original")
+	c := h.login("fay")
+	created := decode[map[string]any](t, c.do("POST", "/api/shares", map[string]any{"path": "fay/report.txt"}))
+	token := strings.TrimPrefix(created["url"].(string), shareOrigin+"/s/")
+	expect(t, h.share().do("GET", "/s/"+token+"/api/info", nil), 200)
+	expect(t, c.do("POST", "/api/files/delete", map[string]any{"paths": []string{"fay/report.txt"}}), 200)
+	write(t, h.root, "fay/report.txt", "something else entirely")
+	rec := h.share().do("GET", "/s/"+token+"/file", nil)
+	if rec.Code == 200 || strings.Contains(rec.Body.String(), "something else") {
+		t.Fatalf("share served the replacement file: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// Signed links die with the session that made them.
+func TestSignedLinkRevokedByLogout(t *testing.T) {
+	h := newHarness(t)
+	h.user("gus", "admin")
+	write(t, h.root, "doc.pdf", "%PDF-1.4")
+	a := h.login("gus")
+	link := decode[map[string]string](t, a.do("POST", "/api/files/preview-url", map[string]string{"path": "doc.pdf"}))["url"]
+	path := strings.TrimPrefix(link, shareOrigin)
+	expect(t, h.share().do("GET", path, nil), 200)
+	expect(t, a.do("POST", "/api/auth/logout", struct{}{}), 200)
+	expect(t, h.share().do("GET", path, nil), 404)
+}
+
+// Trashed files count towards the quota until purged.
+func TestTrashCountsTowardsQuota(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("hal", "user", store.Grant{Path: "hal", Permission: "read"})
+	q := int64(100)
+	if err := h.store.UpdateUser(context.Background(), u.ID, store.UserUpdate{QuotaBytes: &q}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SetGrants(context.Background(), u.ID, []store.Grant{{Path: "hal", Permission: "write"}}); err != nil {
+		t.Fatal(err)
+	}
+	write(t, h.root, "hal/big.bin", strings.Repeat("x", 80))
+	c := h.login("hal")
+	expect(t, c.do("POST", "/api/files/delete", map[string]any{"paths": []string{"hal/big.bin"}}), 200)
+	rec, _ := c.tusUpload("/api/uploads/", "hal", "again.bin", strings.Repeat("y", 50))
+	expect(t, rec, http.StatusRequestEntityTooLarge)
+	expect(t, c.do("POST", "/api/trash/purge", map[string]any{"all": true}), 200)
+	rec, _ = c.tusUpload("/api/uploads/", "hal", "again.bin", strings.Repeat("y", 50))
+	if rec.Code >= 300 {
+		t.Fatalf("upload after purging trash: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// NUL characters in JSON are a client error, not a database error.
+func TestJSONRejectsNUL(t *testing.T) {
+	h := newHarness(t)
+	h.user("ivy", "admin")
+	a := h.login("ivy")
+	expect(t, a.do("POST", "/api/trash/restore", json.RawMessage(`{"ids":["a\u0000b"]}`)), 400)
+	expect(t, h.app().do("POST", "/api/auth/login", json.RawMessage(`{"username":"ivy\u0000","password":"x"}`)), 400)
 }

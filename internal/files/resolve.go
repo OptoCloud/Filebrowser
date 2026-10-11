@@ -28,6 +28,9 @@ func (f *FS) Resolve(p string) (string, error) {
 		} else if err != nil {
 			return "", mapErr(err)
 		}
+		if f.aliasesReserved(strings.Join(out, "/"), parts[i], fi) {
+			return "", ErrForbidden
+		}
 		if fi.Mode()&fs.ModeSymlink == 0 {
 			out = append(out, parts[i])
 			continue
@@ -106,6 +109,9 @@ func (f *FS) AuthorizeEntry(a *Access, p string, want Perm) (string, error) {
 		return "", err
 	}
 	real := Join(dir, Base(p))
+	if fi, err := f.root.Lstat(osPath(real)); err == nil && f.aliasesReserved(dir, Base(p), fi) {
+		return "", ErrForbidden
+	}
 	if err := Need(a, real, want); err != nil {
 		return "", err
 	}

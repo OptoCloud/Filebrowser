@@ -207,6 +207,7 @@ func (s *Service) purge(ctx context.Context, item *store.TrashItem) error {
 	if err := s.FS.RemoveAll(Parent(item.TrashPath)); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	s.InvalidateUsage(item.UserID) // trash counts towards the quota
 	return s.Store.DeleteTrash(ctx, item.ID)
 }
 
@@ -239,9 +240,10 @@ func (s *Service) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int, er
 	return n, nil
 }
 
-// Usage returns the bytes stored in the user's writable grants, cached for a
+// Usage returns the bytes stored in the user's writable grants plus the
+// user's trash (until it is purged, deleting frees no space), cached for a
 // few minutes. It is used for the optional per-user quota.
-func (s *Service) Usage(userID int64, a *Access) int64 {
+func (s *Service) Usage(ctx context.Context, userID int64, a *Access) int64 {
 	s.usageMu.Lock()
 	e, ok := s.usage[userID]
 	s.usageMu.Unlock()
@@ -271,6 +273,10 @@ func (s *Service) Usage(userID int64, a *Access) int64 {
 			total += n
 		}
 	}
+	if s.Store != nil {
+		trashed, _ := s.Store.TrashBytes(ctx, userID)
+		total += trashed
+	}
 	s.usageMu.Lock()
 	s.usage[userID] = usageEntry{bytes: total, at: time.Now()}
 	s.usageMu.Unlock()
@@ -295,10 +301,10 @@ func (s *Service) InvalidateUsage(userID int64) {
 
 // Reserve records n bytes for an in-flight upload, failing if the user's
 // stored plus reserved bytes would exceed quota (quota <= 0: unlimited).
-func (s *Service) Reserve(uploadID string, userID int64, a *Access, n, quota int64) bool {
+func (s *Service) Reserve(ctx context.Context, uploadID string, userID int64, a *Access, n, quota int64) bool {
 	var used int64
 	if quota > 0 {
-		used = s.Usage(userID, a) // outside the lock: may walk the tree
+		used = s.Usage(ctx, userID, a) // outside the lock: may walk the tree
 	}
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()

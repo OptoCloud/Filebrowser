@@ -59,7 +59,7 @@ func NewService(cfg config.Media, st *store.Store, fsys *files.FS, filesRoot, ca
 	return &Service{
 		cfg: cfg, store: st, fs: fsys, filesRoot: abs, cacheDir: cacheAbs,
 		runner:   NewRunner(cfg),
-		thumbSem: make(chan struct{}, 4),
+		thumbSem: make(chan struct{}, 2), // up to 80 MP each, about 320 MB decoded
 		jobs:     map[string]*Job{},
 	}, nil
 }
@@ -195,7 +195,7 @@ func (s *Service) Prepare(ctx context.Context, userID int64, path, variant strin
 		release, err := s.runner.Acquire(context.Background(), userID)
 		if err == nil {
 			s.setState(j, "running")
-			err = s.runJob(j, in, fi, probe, spec)
+			_, err = guard(func() (struct{}, error) { return struct{}{}, s.runJob(j, in, fi, probe, spec) })
 			release()
 		}
 		s.jobsMu.Lock()

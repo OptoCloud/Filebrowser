@@ -27,6 +27,14 @@ var (
 // visible or accessible through the API.
 const Reserved = ".filebrowser"
 
+// IsReservedName reports whether a path component names Reserved, including
+// the spellings that case-insensitive filesystems and Windows resolve to the
+// same entry (".FILEBROWSER", ".filebrowser.", ".filebrowser "). Windows 8.3
+// short names are caught by identity in Resolve.
+func IsReservedName(c string) bool {
+	return strings.EqualFold(strings.TrimRight(c, ". "), Reserved)
+}
+
 const maxPathLen = 4096
 
 // Clean validates a client-supplied path and returns its canonical form.
@@ -43,7 +51,7 @@ func Clean(p string) (string, error) {
 		case "..":
 			return "", ErrBadPath
 		}
-		if c == Reserved {
+		if IsReservedName(c) {
 			return "", ErrForbidden
 		}
 		if len(c) > 255 {
@@ -57,7 +65,7 @@ func Clean(p string) (string, error) {
 // ValidName checks a single path component supplied by a client (new file or
 // folder names).
 func ValidName(name string) error {
-	if name == "" || name == "." || name == ".." || name == Reserved || len(name) > 255 || !utf8.ValidString(name) ||
+	if name == "" || name == "." || name == ".." || IsReservedName(name) || len(name) > 255 || !utf8.ValidString(name) ||
 		strings.ContainsAny(name, "/\\\x00") || strings.TrimSpace(name) == "" {
 		return ErrBadPath
 	}

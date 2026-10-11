@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"filebrowser/internal/audit"
@@ -51,11 +53,14 @@ type Server struct {
 	// allowing a lockout: many free attempts and a short cap.
 	accountBackoff *auth.Backoff
 	totpBackoff    *auth.Backoff
-	shareLimiter   *auth.RateLimiter
-	inviteLimit    *auth.RateLimiter
-	pending        *pendingLogins
+	// shareBackoff limits password guesses per share across all clients.
+	shareBackoff *auth.Backoff
+	shareLimiter *auth.RateLimiter
+	inviteLimit  *auth.RateLimiter
+	pending      *pendingLogins
 
-	proxies []netip.Prefix
+	proxies      []netip.Prefix
+	proxyWarning sync.Once
 
 	appMux   *http.ServeMux
 	shareMux *http.ServeMux
@@ -113,6 +118,7 @@ func New(d Deps) (*Server, error) {
 		loginBackoff:   auth.NewBackoff(5, time.Second, 15*time.Minute, time.Hour),
 		accountBackoff: auth.NewBackoff(20, time.Second, 30*time.Second, time.Hour),
 		totpBackoff:    auth.NewBackoff(5, 2*time.Second, 15*time.Minute, time.Hour),
+		shareBackoff:   auth.NewBackoff(10, time.Second, time.Minute, time.Hour),
 		// Share token lookups: 60/min per IP with a burst of 120.
 		shareLimiter: auth.NewRateLimiter(60, 120),
 		inviteLimit:  auth.NewRateLimiter(10, 20),
@@ -227,7 +233,14 @@ func (s *Server) Janitor(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
-		s.cleanup(ctx)
+		func() {
+			defer func() {
+				if v := recover(); v != nil {
+					slog.Error("panic in cleanup", "err", v, "stack", string(debug.Stack()))
+				}
+			}()
+			s.cleanup(ctx)
+		}()
 		select {
 		case <-ctx.Done():
 			return

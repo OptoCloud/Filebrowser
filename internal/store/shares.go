@@ -18,14 +18,16 @@ type Share struct {
 	DownloadCount int        `json:"download_count"`
 	CreatedAt     time.Time  `json:"created_at"`
 	RevokedAt     *time.Time `json:"revoked_at"`
+	// FileID identifies the shared file or folder (see files.FS.FileID).
+	FileID string `json:"-"`
 }
 
-const shareCols = `id, token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, download_count, created_at, revoked_at`
+const shareCols = `id, token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, download_count, created_at, revoked_at, file_id`
 
 func (s *Store) CreateShare(ctx context.Context, sh *Share) error {
-	return s.pool.QueryRow(ctx, `INSERT INTO shares (token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
-		sh.TokenHash, sh.OwnerID, sh.Path, sh.IsDir, sh.Kind, sh.PasswordHash, sh.ExpiresAt, sh.MaxDownloads,
+	return s.pool.QueryRow(ctx, `INSERT INTO shares (token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, file_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+		sh.TokenHash, sh.OwnerID, sh.Path, sh.IsDir, sh.Kind, sh.PasswordHash, sh.ExpiresAt, sh.MaxDownloads, sh.FileID,
 	).Scan(&sh.ID, &sh.CreatedAt)
 }
 
@@ -40,6 +42,13 @@ func (s *Store) ShareByID(ctx context.Context, id int64) (*Share, error) {
 // Shares lists shares; ownerID 0 lists all.
 func (s *Store) Shares(ctx context.Context, ownerID int64) ([]*Share, error) {
 	return queryAll[Share](ctx, s, `SELECT `+shareCols+` FROM shares WHERE ($1 = 0 OR owner_id = $1) ORDER BY created_at DESC`, ownerID)
+}
+
+// SetShareFileID records the identity of a share created before file_id
+// existed, on its first use.
+func (s *Store) SetShareFileID(ctx context.Context, id int64, fileID string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE shares SET file_id = $2 WHERE id = $1 AND file_id = ''`, id, fileID)
+	return err
 }
 
 func (s *Store) RevokeShare(ctx context.Context, id int64, at time.Time) error {

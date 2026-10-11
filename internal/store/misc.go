@@ -95,6 +95,13 @@ func (s *Store) AddTrash(ctx context.Context, t *TrashItem) error {
 	return err
 }
 
+// TrashBytes is the total size of the user's trash.
+func (s *Store) TrashBytes(ctx context.Context, userID int64) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(sum(size), 0) FROM trash WHERE user_id = $1`, userID).Scan(&n)
+	return n, err
+}
+
 func (s *Store) TrashItems(ctx context.Context, userID int64) ([]*TrashItem, error) {
 	return queryAll[TrashItem](ctx, s, `SELECT `+trashCols+` FROM trash WHERE user_id = $1 ORDER BY trashed_at DESC`, userID)
 }
@@ -248,6 +255,6 @@ func (s *Store) Audit(ctx context.Context, q AuditQuery) ([]*AuditEntry, error) 
 	}
 	return queryAll[AuditEntry](ctx, s, `SELECT a.id, a.ts, a.user_id, u.username, a.ip, a.action, a.target, a.details_json
 		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
-		WHERE ($1 = 0 OR a.id < $1) AND ($2 = '' OR a.action LIKE $2 || '%') AND ($3 = 0 OR a.user_id = $3)
+		WHERE ($1 = 0 OR a.id < $1) AND ($2 = '' OR starts_with(a.action, $2)) AND ($3 = 0 OR a.user_id = $3)
 		ORDER BY a.id DESC LIMIT $4`, q.BeforeID, q.Action, q.UserID, q.Limit)
 }

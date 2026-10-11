@@ -7,7 +7,11 @@ share_origin = "https://share.example.com"
 files_root = "/srv/files"
 data_dir = "/var/lib/filebrowser"
 cache_dir = "/var/cache/filebrowser"
-# The reverse proxy / tunnel in front of the container.
+# The reverse proxy / tunnel in front of the container. Set both when one is
+# in front (it almost always is): otherwise every client shares the proxy's
+# address, so a few failed logins from anyone throttle everyone. Use
+# "CF-Connecting-IP" for Cloudflare Tunnel or "X-Forwarded-For" for Caddy,
+# nginx and Traefik. The server logs a warning while this is missing.
 # trusted_proxies = ["172.16.0.0/12"]
 # trusted_ip_header = "CF-Connecting-IP"
 

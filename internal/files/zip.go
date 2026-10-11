@@ -27,7 +27,7 @@ func (f *FS) WriteZip(ctx context.Context, w io.Writer, paths []string, allow fu
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if d.Name() == Reserved {
+			if IsReservedName(d.Name()) {
 				if d.IsDir() {
 					return fs.SkipDir
 				}
@@ -40,6 +40,9 @@ func (f *FS) WriteZip(ctx context.Context, w io.Writer, paths []string, allow fu
 			if name == "." {
 				rel = "files"
 			}
+			// Unzip tools treat '\' as a separator; a name created on the
+			// host could otherwise extract outside the target folder.
+			rel = strings.ReplaceAll(rel, `\`, "_")
 			if seen[rel] {
 				if d.IsDir() {
 					return fs.SkipDir
@@ -120,7 +123,7 @@ func (f *FS) Search(ctx context.Context, a *Access, start, q string, limit int, 
 					truncated = true
 					return fs.SkipAll
 				}
-				if d.Name() == Reserved {
+				if IsReservedName(d.Name()) {
 					if d.IsDir() {
 						return fs.SkipDir
 					}

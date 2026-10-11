@@ -161,6 +161,7 @@ export interface Job {
   error?: string;
 }
 
+/** A locked share reports only needs_password and unlocked until it is unlocked. */
 export interface ShareInfo {
   name: string;
   kind: 'download' | 'upload';

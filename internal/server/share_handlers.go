@@ -70,7 +70,10 @@ func (s *Server) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := httpx.IdentityFrom(ctx)
 	sh, token, err := s.shares.Create(ctx, id.User, id.Access, req)
-	if err != nil {
+	if ie, ok := errors.AsType[shares.InputError](err); ok {
+		httpx.Error(w, http.StatusBadRequest, ie.Error())
+		return
+	} else if err != nil {
 		httpx.FileError(w, r, err)
 		return
 	}
@@ -105,7 +108,7 @@ func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 // requireUnlocked also enforces the password.
 func (s *Server) resolveShare(w http.ResponseWriter, r *http.Request, requireUnlocked bool) *shares.Resolved {
 	ctx := r.Context()
-	if !s.shareLimiter.Allow(httpx.IP(ctx), time.Now()) {
+	if !s.shareLimiter.Allow(httpx.LimitKey(ctx), time.Now()) {
 		retryAfter(w, time.Minute)
 		return nil
 	}
@@ -149,15 +152,20 @@ func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sh := res.Share
+	if !s.shares.Unlocked(r, sh) {
+		// Nothing about a locked share, not even its name, before the password.
+		httpx.JSON(w, http.StatusOK, map[string]any{"needs_password": true, "unlocked": false})
+		return
+	}
 	info := map[string]any{
 		"name":           files.Base(sh.Path),
 		"kind":           sh.Kind,
 		"is_dir":         sh.IsDir,
 		"expires_at":     sh.ExpiresAt,
 		"needs_password": sh.PasswordHash != "",
-		"unlocked":       s.shares.Unlocked(r, sh),
+		"unlocked":       true,
 	}
-	if !sh.IsDir && info["unlocked"] == true {
+	if !sh.IsDir {
 		if fi, err := s.files.FS.Stat(res.Root); err == nil {
 			info["size"] = fi.Size()
 			info["mime"] = files.MimeType(fi.Name())
@@ -181,13 +189,16 @@ func (s *Server) handleShareUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	key := "share:" + httpx.IP(ctx)
-	if d := s.loginBackoff.Wait(key, time.Now()); d > 0 {
+	// Per client and per share: the share limit stops guessing spread over
+	// many addresses, with a short cap so it cannot lock the link out for long.
+	key, shareKey := "share:"+httpx.LimitKey(ctx), userKey("share", res.Share.ID)
+	if d := max(s.loginBackoff.Wait(key, time.Now()), s.shareBackoff.Wait(shareKey, time.Now())); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	if !s.shares.Unlock(w, res.Share, req.Password) {
 		s.loginBackoff.Fail(key, time.Now())
+		s.shareBackoff.Fail(shareKey, time.Now())
 		s.audit.LogUser(ctx, nil, audit.ShareUnlockFail, res.Share.Path, map[string]any{"share_id": res.Share.ID})
 		httpx.Error(w, http.StatusUnauthorized, "wrong password")
 		return
@@ -306,12 +317,17 @@ func (s *Server) handleSignedLink(w http.ResponseWriter, r *http.Request) {
 	// Bearer-token URLs must never be stored by browsers or intermediaries.
 	w.Header().Set("Cache-Control", "private, no-store")
 	ctx := r.Context()
-	if !s.shareLimiter.Allow(httpx.IP(ctx), time.Now()) {
+	if !s.shareLimiter.Allow(httpx.LimitKey(ctx), time.Now()) {
 		retryAfter(w, time.Minute)
 		return
 	}
 	link, err := s.shares.VerifyLink(r.PathValue("token"))
 	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "link expired")
+		return
+	}
+	sess, err := s.store.SessionByHash(ctx, link.Session)
+	if err != nil || sess.UserID != link.UserID || time.Now().After(sess.ExpiresAt) {
 		httpx.Error(w, http.StatusNotFound, "link expired")
 		return
 	}

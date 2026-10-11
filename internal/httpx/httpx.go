@@ -2,9 +2,11 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -46,32 +48,59 @@ func IP(ctx context.Context) string {
 	return ip
 }
 
+// LimitKey is the client's rate-limit key: its IP address, or for IPv6 its
+// /64, since one subscriber typically holds a whole /64 and could otherwise
+// rotate through fresh buckets.
+func LimitKey(ctx context.Context) string {
+	ip := IP(ctx)
+	a, err := netip.ParseAddr(ip)
+	if err != nil || !a.Is6() || a.Is4In6() {
+		return ip
+	}
+	p, _ := a.Prefix(64)
+	return p.String()
+}
+
 // ClientIP returns the client address. header is believed only when the
-// direct peer is one of the trusted proxies.
+// direct peer is one of the trusted proxies. It may hold a list
+// (X-Forwarded-For: client, proxy1, ...): each proxy appends the address it
+// received from, so the right-most entry that is not itself a trusted proxy is
+// the client, and anything further left could have been forged by it.
 func ClientIP(r *http.Request, header string, trusted []netip.Prefix) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if header == "" {
-		return host
-	}
+	host := PeerAddr(r)
 	peer, err := netip.ParseAddr(host)
-	if err != nil {
+	if header == "" || err != nil || !inPrefixes(peer.Unmap(), trusted) {
 		return host
 	}
-	peer = peer.Unmap()
-	for _, p := range trusted {
-		if p.Contains(peer) {
-			if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
-				if ip := net.ParseIP(v); ip != nil {
-					return ip.String()
-				}
-			}
+	parts := strings.Split(strings.Join(r.Header.Values(header), ","), ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+		if err != nil {
 			break
+		}
+		if a = a.Unmap(); i == 0 || !inPrefixes(a, trusted) {
+			return a.String()
 		}
 	}
 	return host
+}
+
+// PeerAddr is the address of the direct peer (the proxy, if there is one).
+func PeerAddr(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func inPrefixes(a netip.Addr, ps []netip.Prefix) bool {
+	for _, p := range ps {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 func JSON(w http.ResponseWriter, status int, v any) {
@@ -99,16 +128,26 @@ func ErrorCode(w http.ResponseWriter, status int, code, msg string) {
 	JSON(w, status, errorBody{Error: msg, Code: code})
 }
 
-// Decode reads a JSON body into v, rejecting unknown fields and trailing data.
+// Decode reads a JSON body into v, rejecting unknown fields, trailing data
+// and NUL characters (PostgreSQL text cannot hold them and no field needs one).
 func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			Error(w, http.StatusRequestEntityTooLarge, "request body too large")
 		} else {
 			Error(w, http.StatusBadRequest, "invalid JSON body")
 		}
+		return false
+	}
+	if bytes.Contains(body, []byte(`\u0000`)) {
+		Error(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		Error(w, http.StatusBadRequest, "invalid JSON body")
 		return false
 	}
 	if dec.More() {

@@ -75,7 +75,14 @@
       </label>
       <label class="field">
         Password (optional)
-        <input type="password" bind:value={password} autocomplete="new-password" maxlength="256" />
+        <input
+          type="password"
+          bind:value={password}
+          autocomplete="new-password"
+          minlength="8"
+          maxlength="256"
+          placeholder="at least 8 characters"
+        />
       </label>
       {#if kind === 'download'}
         <label class="field">

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -318,7 +319,7 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		}
 		logCLI("user add", name, map[string]any{"role": role, "grants": gs})
 		fmt.Printf("created %s (%s)\n", name, role)
-		if role == "admin" || len(gs) > 0 {
+		if role == "admin" || slices.ContainsFunc(gs, func(g store.Grant) bool { return g.Permission == "write" }) {
 			fmt.Println("note: two-factor authentication will be required at first login")
 		}
 		return nil

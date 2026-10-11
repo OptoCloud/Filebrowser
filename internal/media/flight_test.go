@@ -88,3 +88,11 @@ func TestFlightsCancelWhenEveryoneLeaves(t *testing.T) {
 		t.Fatalf("fresh call = %d, %v", v, err)
 	}
 }
+
+func TestFlightsRecoverPanics(t *testing.T) {
+	var g flights[int]
+	_, err := g.do(context.Background(), "k", func(context.Context) (int, error) { panic("decoder bug") })
+	if !errors.Is(err, ErrConvert) {
+		t.Fatalf("panic surfaced as %v, want ErrConvert", err)
+	}
+}

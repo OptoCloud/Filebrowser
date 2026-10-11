@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"filebrowser/internal/auth"
 	"filebrowser/internal/files"
@@ -23,6 +24,15 @@ var (
 	ErrLocked  = errors.New("share requires password")
 	ErrLimit   = errors.New("download limit reached")
 )
+
+// MinPasswordLen is the shortest share password accepted. Share links are
+// public, so their passwords face guessing from anywhere.
+const MinPasswordLen = 8
+
+// InputError is a mistake in a CreateRequest; its message is shown to the user.
+type InputError string
+
+func (e InputError) Error() string { return string(e) }
 
 type Service struct {
 	Store  *store.Store
@@ -53,7 +63,7 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 		req.Kind = "download"
 	}
 	if req.Kind != "download" && req.Kind != "upload" {
-		return nil, "", fmt.Errorf("%w: kind must be download or upload", files.ErrBadPath)
+		return nil, "", InputError("kind must be download or upload")
 	}
 	// Creating any share requires write access to the shared path. The share
 	// stores the real (symlink-resolved) path.
@@ -80,12 +90,16 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 	}
 	var pwHash string
 	if req.Password != "" {
-		if len(req.Password) > auth.MaxPasswordLen {
-			return nil, "", fmt.Errorf("%w: password too long", files.ErrBadPath)
+		if n := utf8.RuneCountInString(req.Password); n < MinPasswordLen || len(req.Password) > auth.MaxPasswordLen {
+			return nil, "", InputError(fmt.Sprintf("share password must be %d to %d characters", MinPasswordLen, auth.MaxPasswordLen))
 		}
 		if pwHash, err = auth.HashPassword(req.Password); err != nil {
 			return nil, "", err
 		}
+	}
+	fileID, err := s.Files.FS.FileID(p)
+	if err != nil {
+		return nil, "", err
 	}
 	token := auth.NewToken(18) // 144 bits
 	sh := &store.Share{
@@ -97,6 +111,7 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 		PasswordHash: pwHash,
 		ExpiresAt:    time.Now().Add(exp).UTC(),
 		MaxDownloads: req.MaxDownloads,
+		FileID:       fileID,
 	}
 	if err := s.Store.CreateShare(ctx, sh); err != nil {
 		return nil, "", err
@@ -148,6 +163,20 @@ func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) 
 	}
 	root, err := s.Files.FS.Authorize(a, sh.Path, want)
 	if err != nil {
+		return nil, ErrInvalid
+	}
+	// A share is for the file it was made for, not whatever is at its path
+	// now: after a delete or rename, a new file there must not be served.
+	fileID, err := s.Files.FS.FileID(root)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	switch {
+	case sh.FileID == "" && fileID != "":
+		if err := s.Store.SetShareFileID(ctx, sh.ID, fileID); err != nil {
+			return nil, err
+		}
+	case sh.FileID != fileID:
 		return nil, ErrInvalid
 	}
 	return &Resolved{Share: sh, Owner: owner, Access: a, Root: root, fs: s.Files.FS}, nil
@@ -241,7 +270,10 @@ func (s *Service) Unlock(w http.ResponseWriter, sh *store.Share, password string
 // Link is the payload of a short-lived signed URL on the share origin, used
 // for "Open in VLC" and for PDF previews.
 type Link struct {
-	UserID  int64  `json:"u"`
+	UserID int64 `json:"u"`
+	// Session is the hash of the session that made the link: logging out (or
+	// any other end of that session) revokes the link too.
+	Session []byte `json:"s"`
 	Path    string `json:"p"`
 	Variant string `json:"v,omitempty"`
 	Inline  bool   `json:"i,omitempty"`
