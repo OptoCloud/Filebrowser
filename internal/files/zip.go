@@ -27,8 +27,11 @@ func (f *FS) WriteZip(ctx context.Context, w io.Writer, paths []string, allow fu
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if name == Reserved || strings.HasPrefix(name, Reserved+"/") {
-				return fs.SkipDir
+			if d.Name() == Reserved {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
 			}
 			rel := name
 			if prefix != "" {
@@ -117,8 +120,11 @@ func (f *FS) Search(ctx context.Context, a *Access, start, q string, limit int, 
 					truncated = true
 					return fs.SkipAll
 				}
-				if name == Reserved {
-					return fs.SkipDir
+				if d.Name() == Reserved {
+					if d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
 				}
 				if name != "." && name != osPath(dir) && strings.Contains(strings.ToLower(d.Name()), q) {
 					if fi, err := d.Info(); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {

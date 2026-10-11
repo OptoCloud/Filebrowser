@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"filebrowser/internal/auth"
 	"filebrowser/internal/store"
 )
 
@@ -89,7 +88,7 @@ func (s *Service) Rename(a *Access, p, newName string) (string, error) {
 	if to == real {
 		return real, nil
 	}
-	return to, s.FS.Rename(real, to)
+	return to, s.FS.Move(real, to)
 }
 
 // Move moves each path into dest. It stops at the first error and returns the
@@ -117,7 +116,7 @@ func (s *Service) Move(a *Access, paths []string, dest string) ([]string, error)
 		if to == real {
 			continue
 		}
-		if err := s.FS.Rename(real, to); err != nil {
+		if err := s.FS.Move(real, to); err != nil {
 			return moved, err
 		}
 		moved = append(moved, to)
@@ -137,8 +136,10 @@ func (s *Service) Delete(ctx context.Context, userID int64, a *Access, paths []s
 		if err != nil {
 			return items, err
 		}
-		id := auth.NewToken(12)
-		dir := TrashDir + "/" + id
+		id := newID()
+		// Trash on the item's own filesystem, so deleting is a rename.
+		trash, _ := s.FS.ReservedDir(Parent(p), "trash")
+		dir := trash + "/" + id
 		if err := s.FS.Root().Mkdir(dir, 0o750); err != nil {
 			return items, mapErr(err)
 		}
@@ -147,14 +148,14 @@ func (s *Service) Delete(ctx context.Context, userID int64, a *Access, paths []s
 			size, _ = s.FS.Size(p)
 		}
 		tp := dir + "/" + Base(p)
-		if err := s.FS.Rename(p, tp); err != nil {
+		if err := s.FS.Move(p, tp); err != nil {
 			_ = s.FS.Root().Remove(dir)
 			return items, err
 		}
 		item := &store.TrashItem{ID: id, UserID: userID, OriginalPath: p, TrashPath: tp, IsDir: fi.IsDir(), Size: size, TrashedAt: time.Now().UTC()}
 		if err := s.Store.AddTrash(ctx, item); err != nil {
 			// Put it back rather than orphaning it in the trash.
-			_ = s.FS.Rename(tp, p)
+			_ = s.FS.Move(tp, p)
 			_ = s.FS.Root().Remove(dir)
 			return items, err
 		}
@@ -184,7 +185,7 @@ func (s *Service) Restore(ctx context.Context, userID int64, a *Access, id strin
 	if err != nil {
 		return "", err
 	}
-	if err := s.FS.Rename(item.TrashPath, to); err != nil {
+	if err := s.FS.Move(item.TrashPath, to); err != nil {
 		return "", err
 	}
 	_ = s.FS.Root().Remove(Parent(item.TrashPath))

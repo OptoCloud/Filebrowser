@@ -21,8 +21,10 @@ var (
 	ErrNotDir    = errors.New("not a directory")
 )
 
-// Reserved is the top-level directory holding trash and in-progress uploads.
-// It is never visible or accessible through the API.
+// Reserved names the directories holding trash, in-progress uploads and
+// temporary copies: one below files_root, plus one at the top of each other
+// filesystem mounted below it. Entries with this name, at any depth, are never
+// visible or accessible through the API.
 const Reserved = ".filebrowser"
 
 const maxPathLen = 4096
@@ -34,14 +36,14 @@ func Clean(p string) (string, error) {
 		return "", ErrBadPath
 	}
 	var out []string
-	for _, c := range strings.Split(p, "/") {
+	for c := range strings.SplitSeq(p, "/") {
 		switch c {
 		case "", ".":
 			continue
 		case "..":
 			return "", ErrBadPath
 		}
-		if len(out) == 0 && c == Reserved {
+		if c == Reserved {
 			return "", ErrForbidden
 		}
 		if len(c) > 255 {
@@ -55,7 +57,7 @@ func Clean(p string) (string, error) {
 // ValidName checks a single path component supplied by a client (new file or
 // folder names).
 func ValidName(name string) error {
-	if name == "" || name == "." || name == ".." || len(name) > 255 || !utf8.ValidString(name) ||
+	if name == "" || name == "." || name == ".." || name == Reserved || len(name) > 255 || !utf8.ValidString(name) ||
 		strings.ContainsAny(name, "/\\\x00") || strings.TrimSpace(name) == "" {
 		return ErrBadPath
 	}

@@ -5,15 +5,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"filebrowser/internal/store"
+	"filebrowser/internal/store/storetest"
 )
 
 func TestCleanRejectsTraversal(t *testing.T) {
 	bad := []string{"..", "../etc/passwd", "a/../../b", "a/..", `a\..\b`, "\x00", "a/\x00/b",
-		".filebrowser", "/.filebrowser/trash", "..%2f"}
+		".filebrowser", "/.filebrowser/trash", "a/.filebrowser", "a/.filebrowser/trash/x", "..%2f"}
 	for _, p := range bad {
 		if p == "..%2f" {
 			continue // URL decoding happens before Clean; covered by server tests
@@ -22,7 +24,7 @@ func TestCleanRejectsTraversal(t *testing.T) {
 			t.Errorf("Clean(%q) succeeded", p)
 		}
 	}
-	good := map[string]string{"": "", "/": "", "a": "a", "/a/b/": "a/b", "a//b/./c": "a/b/c", "a/.filebrowser": "a/.filebrowser"}
+	good := map[string]string{"": "", "/": "", "a": "a", "/a/b/": "a/b", "a//b/./c": "a/b/c", "a/.filebrowserx": "a/.filebrowserx"}
 	for in, want := range good {
 		got, err := Clean(in)
 		if err != nil || got != want {
@@ -32,7 +34,7 @@ func TestCleanRejectsTraversal(t *testing.T) {
 }
 
 func TestValidName(t *testing.T) {
-	for _, n := range []string{"", ".", "..", "a/b", `a\b`, "x\x00", "tab\tname", "  "} {
+	for _, n := range []string{"", ".", "..", "a/b", `a\b`, "x\x00", "tab\tname", "  ", Reserved} {
 		if ValidName(n) == nil {
 			t.Errorf("ValidName(%q) accepted", n)
 		}
@@ -146,7 +148,7 @@ func TestOpsAndUniquePath(t *testing.T) {
 	if p != "home/a (1).txt" {
 		t.Fatalf("UniquePath = %q", p)
 	}
-	if err := f.Rename("home/docs", "home/a.txt"); !errors.Is(err, ErrExists) {
+	if err := f.Move("home/docs", "home/a.txt"); !errors.Is(err, ErrExists) {
 		t.Fatalf("rename over existing: %v", err)
 	}
 }
@@ -197,5 +199,111 @@ func TestResolveSymlinks(t *testing.T) {
 	}
 	if got, err := f.AuthorizeEntry(a, "pub/sub/up", PermWrite); err != nil || got != "pub/sub/up" {
 		t.Fatalf("entry op on the link itself: %q %v", got, err)
+	}
+}
+
+func TestReservedHiddenAtAnyDepth(t *testing.T) {
+	f, dir := newFS(t)
+	os.MkdirAll(filepath.Join(dir, "share", Reserved, "trash"), 0o755)
+	os.WriteFile(filepath.Join(dir, "share", Reserved, "trash", "x"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "share", "song.flac"), nil, 0o644)
+	admin := &Access{Admin: true}
+	entries, _, err := f.List(admin, "share")
+	if err != nil || len(entries) != 1 || entries[0].Name != "song.flac" {
+		t.Fatalf("List = %+v, %v", entries, err)
+	}
+	if res, _ := f.Search(context.Background(), admin, "", "x", 100, time.Second); len(res) != 0 {
+		t.Fatalf("search found reserved entries: %+v", res)
+	}
+	if err := os.Symlink(filepath.Join(Reserved, "trash"), filepath.Join(dir, "share", "peek")); err == nil {
+		if _, err := f.Resolve("share/peek/x"); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("Resolve through link into reserved dir: %v", err)
+		}
+	}
+	if n, _ := f.Size("share"); n != 0 {
+		t.Fatalf("Size counted reserved entries: %d", n)
+	}
+}
+
+// crossDevice makes renames between different top-level directories fail as
+// they would between filesystems; with layoutKnown false every cross-device
+// fallback rename fails too, as on a platform without device ids.
+func crossDevice(f *FS, layoutKnown bool) {
+	real := f.rename
+	f.rename = func(from, to string) error {
+		top := func(p string) string { t, _, _ := strings.Cut(p, "/"); return t }
+		if top(from) != top(to) && (!layoutKnown || top(from) != Reserved) {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: errCrossDevice}
+		}
+		return real(from, to)
+	}
+}
+
+func TestMoveAcrossFilesystems(t *testing.T) {
+	if errCrossDevice == nil {
+		t.Skip("no cross-device error on this platform")
+	}
+	for _, known := range []bool{true, false} {
+		f, dir := newFS(t)
+		crossDevice(f, known)
+		mtime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+		os.MkdirAll(filepath.Join(dir, "a", "tree", "sub"), 0o755)
+		os.MkdirAll(filepath.Join(dir, "b"), 0o755)
+		os.WriteFile(filepath.Join(dir, "a", "tree", "sub", "f.txt"), []byte("hello"), 0o644)
+		os.Chtimes(filepath.Join(dir, "a", "tree", "sub", "f.txt"), mtime, mtime)
+		links := os.Symlink("sub/f.txt", filepath.Join(dir, "a", "tree", "link")) == nil
+
+		if err := f.Move("a/tree", "b/tree"); err != nil {
+			t.Fatalf("known=%v: Move: %v", known, err)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "a", "tree")); !os.IsNotExist(err) {
+			t.Fatalf("known=%v: source still exists: %v", known, err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "b", "tree", "sub", "f.txt"))
+		if err != nil || string(got) != "hello" {
+			t.Fatalf("known=%v: copied content = %q, %v", known, got, err)
+		}
+		if fi, _ := os.Stat(filepath.Join(dir, "b", "tree", "sub", "f.txt")); !fi.ModTime().Equal(mtime) {
+			t.Fatalf("known=%v: mtime not preserved: %v", known, fi.ModTime())
+		}
+		if links {
+			if target, err := os.Readlink(filepath.Join(dir, "b", "tree", "link")); err != nil || target != "sub/f.txt" {
+				t.Fatalf("known=%v: symlink = %q, %v", known, target, err)
+			}
+		}
+		if des, _ := os.ReadDir(filepath.Join(dir, Reserved, "tmp")); len(des) != 0 {
+			t.Fatalf("known=%v: temporary copies left behind: %v", known, des)
+		}
+		os.WriteFile(filepath.Join(dir, "a", "x"), nil, 0o644)
+		if err := f.Move("a/x", "b/tree"); !errors.Is(err, ErrExists) {
+			t.Fatalf("known=%v: move over existing: %v", known, err)
+		}
+	}
+}
+
+func TestDeleteRestoreAcrossFilesystems(t *testing.T) {
+	if errCrossDevice == nil {
+		t.Skip("no cross-device error on this platform")
+	}
+	f, dir := newFS(t)
+	crossDevice(f, false)
+	st := storetest.New(t)
+	u, err := st.CreateUser(context.Background(), "u", "", "admin", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewService(f, st)
+	a := &Access{Admin: true}
+	os.MkdirAll(filepath.Join(dir, "share"), 0o755)
+	os.WriteFile(filepath.Join(dir, "share", "doc.txt"), []byte("d"), 0o644)
+	items, err := s.Delete(context.Background(), u.ID, a, []string{"share/doc.txt"})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Restore(context.Background(), u.ID, a, items[0].ID); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "share", "doc.txt")); string(got) != "d" {
+		t.Fatalf("restored content = %q", got)
 	}
 }

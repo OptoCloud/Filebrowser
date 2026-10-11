@@ -23,8 +23,6 @@ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UV
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/tus/lockfile v1.2.0 h1:92dMoNyeb5zaNi8eQ79WLqt/npUWUFkaM5ZM9kOMIDM=
-github.com/tus/lockfile v1.2.0/go.mod h1:JyfWCHNyfd7eGxudGohrkt38kuKRki6L0JH82p2e+mc=
 github.com/tus/tusd/v2 v2.10.1 h1:hO312j4rT0unhaF4Ga7izNaYGbPOKI2kVIXbKgtv1W8=
 github.com/tus/tusd/v2 v2.10.1/go.mod h1:33RsdwtbXdqb3esrge+95TT7XUHl45uSO1vvA96fNbc=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=

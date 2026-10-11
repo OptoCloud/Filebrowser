@@ -1,27 +1,26 @@
 // Package uploads integrates tus resumable uploads.
 //
-// Uploads are written to files_root/.filebrowser/uploads and renamed into
-// place when complete, so they never need to be copied.
+// Uploads are staged in a reserved directory on the destination's filesystem
+// (see rootStore) and renamed into place when complete, so they never need to
+// be copied.
 package uploads
 
 import (
 	"context"
 	"errors"
-	"filebrowser/internal/auth"
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/tus/tusd/v2/pkg/filelocker"
-	"github.com/tus/tusd/v2/pkg/filestore"
 	tushandler "github.com/tus/tusd/v2/pkg/handler"
+	"github.com/tus/tusd/v2/pkg/memorylocker"
 	expslog "golang.org/x/exp/slog"
 
 	"filebrowser/internal/audit"
+	"filebrowser/internal/auth"
 	"filebrowser/internal/files"
 	"filebrowser/internal/httpx"
 	"filebrowser/internal/shares"
@@ -42,7 +41,7 @@ type Uploads struct {
 	files   *files.Service
 	shares  *shares.Service
 	audit   *audit.Logger
-	store   tushandler.DataStore
+	store   rootStore
 	maxSize int64
 	// failedLookup rate-limits invalid share tokens per client IP.
 	failedLookup func(ip string) bool
@@ -57,15 +56,15 @@ type shareCtxKey struct{}
 // answers 429 instead of 404.
 func New(fsvc *files.Service, sh *shares.Service, al *audit.Logger, appOrigin, shareOrigin string, maxSize int64, failedLookup func(ip string) bool) (*Uploads, error) {
 	u := &Uploads{files: fsvc, shares: sh, audit: al, maxSize: maxSize, failedLookup: failedLookup}
-	dir := fsvc.FS.AbsUploadsDir()
-	fstore := filestore.New(dir)
-	u.store = fstore
+	u.store = rootStore{fs: fsvc.FS}
+	// One process serves all uploads, so in-memory locks suffice.
+	locker := memorylocker.New()
 
 	mk := func(base string, create func(tushandler.HookEvent) (tushandler.HTTPResponse, tushandler.FileInfoChanges, error),
 		finish func(tushandler.HookEvent) (tushandler.HTTPResponse, error)) (*tushandler.Handler, error) {
 		composer := tushandler.NewStoreComposer()
-		fstore.UseIn(composer)
-		filelocker.New(dir).UseIn(composer)
+		u.store.UseIn(composer)
+		locker.UseIn(composer)
 		return tushandler.NewHandler(tushandler.Config{
 			BasePath:             base,
 			StoreComposer:        composer,
@@ -164,9 +163,7 @@ func (u *Uploads) appCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse, t
 	if err != nil {
 		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
 	}
-	return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{ID: uploadID, MetaData: tushandler.MetaData{
-		metaOwner: "u:" + strconv.FormatInt(id.User.ID, 10), metaDir: dir, metaName: name, "filename": name,
-	}}, nil
+	return tushandler.HTTPResponse{}, u.changes(uploadID, "u:"+strconv.FormatInt(id.User.ID, 10), dir, name), nil
 }
 
 func (u *Uploads) appFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse, error) {
@@ -200,9 +197,18 @@ func (u *Uploads) shareCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 	if err != nil {
 		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
 	}
-	return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{ID: uploadID, MetaData: tushandler.MetaData{
-		metaOwner: "s:" + strconv.FormatInt(res.Share.ID, 10), metaDir: dir, metaName: name, "filename": name,
-	}}, nil
+	return tushandler.HTTPResponse{}, u.changes(uploadID, "s:"+strconv.FormatInt(res.Share.ID, 10), dir, name), nil
+}
+
+// changes records the upload's owner and destination, and stages its data on
+// the destination's filesystem so that place can rename it into position.
+func (u *Uploads) changes(uploadID, owner, dir, name string) tushandler.FileInfoChanges {
+	stage, _ := u.files.FS.ReservedDir(dir, "uploads")
+	return tushandler.FileInfoChanges{
+		ID:       uploadID,
+		MetaData: tushandler.MetaData{metaOwner: owner, metaDir: dir, metaName: name, "filename": name},
+		Storage:  map[string]string{storageDir: stage},
+	}
 }
 
 func (u *Uploads) shareFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse, error) {
@@ -237,11 +243,10 @@ func (u *Uploads) place(ev tushandler.HookEvent, a *files.Access, within string)
 	if err != nil {
 		return "", err
 	}
-	src := files.UploadsDir + "/" + ev.Upload.ID
-	if err := fsys.Rename(src, final); err != nil {
+	if err := fsys.Move(binPath(ev.Upload), final); err != nil {
 		return "", fmt.Errorf("move upload: %w", err)
 	}
-	_ = fsys.Root().Remove(src + ".info")
+	_ = fsys.Root().Remove(infoPath(ev.Upload.ID))
 	return final, nil
 }
 
@@ -315,26 +320,42 @@ func (u *Uploads) withShare(next http.Handler) http.Handler {
 // Cleanup removes incomplete uploads not touched for maxAge.
 func (u *Uploads) Cleanup(maxAge time.Duration) {
 	u.files.ReleaseOlderThan(maxAge)
-	dir := u.files.FS.AbsUploadsDir()
-	entries, err := os.ReadDir(dir)
+	root := u.files.FS.Root()
+	d, err := root.Open(files.UploadsDir)
+	if err != nil {
+		return
+	}
+	entries, err := d.ReadDir(-1)
+	_ = d.Close()
 	if err != nil {
 		return
 	}
 	cutoff := time.Now().Add(-maxAge)
+	stale := func(p string) bool {
+		fi, err := root.Stat(p)
+		return err != nil || fi.ModTime().Before(cutoff)
+	}
 	for _, e := range entries {
-		id, ok := strings.CutSuffix(e.Name(), ".info")
-		if !ok {
+		name := e.Name()
+		if strings.HasSuffix(name, ".lock") { // left by the file locker used before
+			_ = root.Remove(files.UploadsDir + "/" + name)
 			continue
 		}
-		fi, err := os.Stat(filepath.Join(dir, id))
-		if err == nil && fi.ModTime().After(cutoff) {
+		id, ok := strings.CutSuffix(name, ".info")
+		if !ok || !stale(infoPath(id)) {
 			continue
 		}
-		if info, err := e.Info(); err == nil && info.ModTime().After(cutoff) && fi == nil {
+		up, err := u.store.GetUpload(context.Background(), id)
+		if err == nil {
+			ru := up.(*rootUpload)
+			if !stale(ru.binPath()) {
+				continue // still being written
+			}
+			_ = ru.Terminate(context.Background())
 			continue
 		}
-		_ = os.Remove(filepath.Join(dir, id))
-		_ = os.Remove(filepath.Join(dir, id+".info"))
-		_ = os.Remove(filepath.Join(dir, id+".lock"))
+		// Unreadable info, or from the previous storage backend.
+		_ = root.Remove(files.UploadsDir + "/" + id)
+		_ = root.Remove(infoPath(id))
 	}
 }

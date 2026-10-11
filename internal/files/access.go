@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"strings"
 
 	"filebrowser/internal/store"
@@ -24,6 +25,16 @@ func (p Perm) String() string {
 type Access struct {
 	Admin  bool
 	Grants []store.Grant
+}
+
+// AccessFor loads the current access of u. It is re-read on every request,
+// so grant changes take effect immediately.
+func AccessFor(ctx context.Context, st *store.Store, u *store.User) (*Access, error) {
+	grants, err := st.Grants(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &Access{Admin: u.IsAdmin(), Grants: grants}, nil
 }
 
 func (a *Access) Perm(p string) Perm {

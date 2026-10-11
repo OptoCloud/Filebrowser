@@ -7,7 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,8 +16,12 @@ import (
 type FS struct {
 	root *os.Root
 	dir  string
+	// rename is root.Rename; tests replace it to simulate crossing filesystems.
+	rename func(from, to string) error
 }
 
+// Central reserved directories. Trash and staged uploads may also live in a
+// Reserved directory on another filesystem below files_root (see ReservedDir).
 const (
 	TrashDir   = Reserved + "/trash"
 	UploadsDir = Reserved + "/uploads"
@@ -32,23 +36,19 @@ func OpenFS(dir string) (*FS, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range []string{TrashDir, UploadsDir} {
+	for _, d := range []string{TrashDir, UploadsDir, Reserved + "/tmp"} {
 		if err := root.MkdirAll(d, 0o750); err != nil {
 			_ = root.Close()
 			return nil, fmt.Errorf("create %s: %w", d, err)
 		}
 	}
-	return &FS{root: root, dir: abs}, nil
+	return &FS{root: root, dir: abs, rename: root.Rename}, nil
 }
 
 func (f *FS) Close() error { return f.root.Close() }
 
 // Root exposes the os.Root for packages that need raw confined access.
 func (f *FS) Root() *os.Root { return f.root }
-
-// AbsUploadsDir is the on-disk directory for in-progress tus uploads. It lives
-// inside files_root so completed uploads can be moved into place by rename.
-func (f *FS) AbsUploadsDir() string { return filepath.Join(f.dir, filepath.FromSlash(UploadsDir)) }
 
 func mapErr(err error) error {
 	switch {
@@ -61,12 +61,10 @@ func mapErr(err error) error {
 	case errors.Is(err, fs.ErrPermission):
 		return ErrForbidden
 	}
-	var pe *os.PathError
-	if errors.As(err, &pe) && strings.Contains(pe.Err.Error(), "escapes") {
+	if pe, ok := errors.AsType[*os.PathError](err); ok && strings.Contains(pe.Err.Error(), "escapes") {
 		return ErrForbidden
 	}
-	var le *os.LinkError
-	if errors.As(err, &le) && strings.Contains(le.Err.Error(), "escapes") {
+	if le, ok := errors.AsType[*os.LinkError](err); ok && strings.Contains(le.Err.Error(), "escapes") {
 		return ErrForbidden
 	}
 	return err
@@ -155,7 +153,7 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 	out := make([]Entry, 0, len(des))
 	for _, de := range des {
 		name := de.Name()
-		if real == "" && name == Reserved {
+		if name == Reserved {
 			continue
 		}
 		if allowed != nil && !allowed[name] {
@@ -181,11 +179,14 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 		}
 		out = append(out, entryFromInfo(dir, fi))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IsDir != out[j].IsDir {
-			return out[i].IsDir
+	slices.SortFunc(out, func(a, b Entry) int {
+		if a.IsDir != b.IsDir {
+			if a.IsDir {
+				return -1
+			}
+			return 1
 		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 	return out, perm, nil
 }
@@ -199,16 +200,6 @@ func (f *FS) MkdirAll(p string) error {
 		return nil
 	}
 	return mapErr(f.root.MkdirAll(osPath(p), 0o755))
-}
-
-// Rename moves from -> to, refusing to overwrite.
-func (f *FS) Rename(from, to string) error {
-	if _, err := f.root.Lstat(osPath(to)); err == nil {
-		return ErrExists
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return mapErr(err)
-	}
-	return mapErr(f.root.Rename(osPath(from), osPath(to)))
 }
 
 func (f *FS) RemoveAll(p string) error {
@@ -226,7 +217,7 @@ func (f *FS) UniquePath(p string) (string, error) {
 	if ext == name {
 		stem, ext = name, ""
 	}
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		cand := p
 		if i > 0 {
 			cand = Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
@@ -241,12 +232,16 @@ func (f *FS) UniquePath(p string) (string, error) {
 	return "", ErrExists
 }
 
-// Size returns the total size of p (recursively for directories).
+// Size returns the total size of p (recursively for directories), not
+// counting Reserved directories (trash and staged uploads).
 func (f *FS) Size(p string) (int64, error) {
 	var total int64
 	err := fs.WalkDir(f.root.FS(), osPath(p), func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
+		}
+		if d.IsDir() && d.Name() == Reserved {
+			return fs.SkipDir
 		}
 		if d.Type().IsRegular() {
 			if fi, err := d.Info(); err == nil {

@@ -58,7 +58,7 @@ func (f *FS) Resolve(p string) (string, error) {
 		}
 	}
 	real := strings.Join(out, "/")
-	if real == Reserved || strings.HasPrefix(real, Reserved+"/") {
+	if hasReserved(real) {
 		return "", ErrForbidden
 	}
 	return real, nil
@@ -66,7 +66,7 @@ func (f *FS) Resolve(p string) (string, error) {
 
 func splitPath(p string) []string {
 	var out []string
-	for _, c := range strings.Split(p, "/") {
+	for c := range strings.SplitSeq(p, "/") {
 		if c != "" && c != "." {
 			out = append(out, c)
 		}
