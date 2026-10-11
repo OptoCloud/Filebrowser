@@ -260,7 +260,7 @@ func TestLoginTOTPAndRestrictedSession(t *testing.T) {
 	// Fresh login now requires the second factor; the enrollment code cannot be replayed.
 	c2 := h.app()
 	resp := decode[map[string]any](t, c2.do("POST", "/api/auth/login", map[string]string{"username": "alice", "password": testPassword}))
-	if resp["totp_required"] != true {
+	if resp["mfa_required"] != true || resp["totp"] != true || resp["webauthn"] != false {
 		t.Fatalf("expected totp step, got %v", resp)
 	}
 	tok := resp["token"].(string)

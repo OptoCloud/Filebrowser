@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 
 	"filebrowser/internal/files"
@@ -73,8 +74,8 @@ func ClientIP(r *http.Request, header string, trusted []netip.Prefix) string {
 		return host
 	}
 	parts := strings.Split(strings.Join(r.Header.Values(header), ","), ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+	for i, part := range slices.Backward(parts) {
+		a, err := netip.ParseAddr(strings.TrimSpace(part))
 		if err != nil {
 			break
 		}

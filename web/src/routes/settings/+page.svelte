@@ -16,8 +16,14 @@
     page.url.searchParams.get('linked')
       ? 'Account linked.'
       : page.url.searchParams.get('totp')
-        ? 'Two-factor authentication enabled.'
-        : ''
+        ? 'Authenticator app enabled.'
+        : page.url.searchParams.get('key')
+          ? 'Security key added.'
+          : ''
+  );
+  // Disabling the authenticator app must leave a second factor on accounts that require one.
+  const canDisableTOTP = $derived(
+    !!me && me.totp_enabled && (!me.totp_required || me.webauthn_count > 0)
   );
   let pageErr = $state(notices[page.url.searchParams.get('error') ?? ''] ?? '');
 
@@ -60,7 +66,7 @@
       await post('/api/auth/totp/disable', { password: dPassword, code: dCode.replace(/\s/g, '') });
       disableOpen = false;
       dPassword = dCode = '';
-      notice = 'Two-factor authentication disabled.';
+      notice = 'Authenticator app disabled.';
       await invalidateAll();
     } catch (x) {
       dErr = errorMessage(x);
@@ -184,15 +190,26 @@
 
     <div class="card">
       <h2 class="first">Two-factor authentication</h2>
-      {#if me.totp_enabled}
+      {#if me.mfa_enabled}
         <p><span class="badge ok">enabled</span></p>
+        <p class="small">
+          Authenticator app: {me.totp_enabled ? 'on' : 'off'} · Security keys and passkeys: {me.webauthn_count ||
+            'none'}
+        </p>
         {#if me.totp_required}
           <p class="small muted">
-            Required for your account. An administrator can reset it if you lose your device.
+            Required for your account. Keep more than one second factor (for example a spare
+            security key) in case you lose one; an administrator can reset two-factor otherwise.
           </p>
-        {:else}
-          <button class="danger" onclick={() => (disableOpen = true)}>Disable</button>
         {/if}
+        <div class="row">
+          <a class="btn" href="/settings/2fa">Manage</a>
+          {#if canDisableTOTP}
+            <button class="danger" onclick={() => (disableOpen = true)}
+              >Disable authenticator app</button
+            >
+          {/if}
+        </div>
       {:else}
         <p><span class="badge bad">not enabled</span></p>
         <a class="btn primary" href="/settings/2fa">Set up</a>
@@ -267,7 +284,7 @@
 {/if}
 
 {#if disableOpen && me}
-  <Modal title="Disable two-factor authentication" onclose={() => (disableOpen = false)}>
+  <Modal title="Disable authenticator app" onclose={() => (disableOpen = false)}>
     <form id="disable-form" onsubmit={disableTOTP}>
       {#if me.has_password}
         <label class="field"

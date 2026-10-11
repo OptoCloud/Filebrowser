@@ -41,6 +41,7 @@ type Server struct {
 	keys     *auth.Keys
 	sessions *auth.Sessions
 	oidc     *auth.OIDC
+	webauthn *auth.WebAuthn
 	files    *files.Service
 	media    *media.Service
 	shares   *shares.Service
@@ -57,6 +58,7 @@ type Server struct {
 	shareBackoff *auth.Backoff
 	shareLimiter *auth.RateLimiter
 	inviteLimit  *auth.RateLimiter
+	passkeyLimit *auth.RateLimiter
 	pending      *pendingLogins
 
 	proxies      []netip.Prefix
@@ -122,6 +124,7 @@ func New(d Deps) (*Server, error) {
 		// Share token lookups: 60/min per IP with a burst of 120.
 		shareLimiter: auth.NewRateLimiter(60, 120),
 		inviteLimit:  auth.NewRateLimiter(10, 20),
+		passkeyLimit: auth.NewRateLimiter(30, 30),
 		pending:      newPendingLogins(),
 		appMux:       http.NewServeMux(),
 		shareMux:     http.NewServeMux(),
@@ -135,6 +138,9 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s.uploads = up
+	if s.webauthn, err = auth.NewWebAuthn(cfg.AppOrigin); err != nil {
+		return nil, err
+	}
 	if s.proxies, err = cfg.ProxyPrefixes(); err != nil {
 		return nil, err
 	}
@@ -270,6 +276,7 @@ func (s *Server) cleanup(ctx context.Context) {
 	}
 	s.uploads.Cleanup(24 * time.Hour)
 	s.pending.gc()
+	s.webauthn.GC()
 	if s.media != nil {
 		s.media.Evict(ctx)
 	}

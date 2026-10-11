@@ -30,13 +30,27 @@ export interface Me {
   grants: Grant[] | null;
   can_write: boolean;
   totp_enabled: boolean;
+  /** A second factor is required for this account. */
   totp_required: boolean;
+  /** The session must enroll a second factor before anything else. */
   restricted: boolean;
+  webauthn_count: number;
+  /** TOTP or at least one security key is set up. */
+  mfa_enabled: boolean;
   has_password: boolean;
   oidc: OIDCIdentity[] | null;
   providers: Provider[];
   share_origin: string;
   usage_bytes?: number;
+}
+
+/** A registered security key or passkey. */
+export interface WebAuthnKey {
+  id: string;
+  name: string;
+  passkey: boolean;
+  created_at: string;
+  last_used_at: string | null;
 }
 
 export interface Entry {
@@ -96,6 +110,7 @@ export interface Session {
 
 export interface AdminUser extends User {
   totp_enabled: boolean;
+  webauthn_count: number;
   has_password: boolean;
   grants: Grant[] | null;
 }

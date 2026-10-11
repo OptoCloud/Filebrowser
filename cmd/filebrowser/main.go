@@ -42,7 +42,7 @@ commands:
   user add <name> [-admin] [-grant path:read|write]... [-password-stdin]
   user list
   user reset-password <name> [-password-stdin]
-  user reset-totp <name>
+  user reset-totp <name>                remove TOTP and all security keys
   user grant <name> <path> read|write|none
   user disable|enable <name>
 
@@ -363,7 +363,7 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		if err != nil {
 			return err
 		}
-		if err := st.DisableTOTP(ctx, u.ID); err != nil {
+		if err := st.ResetSecondFactors(ctx, u.ID); err != nil {
 			return err
 		}
 		n, _ := st.DeleteUserSessions(ctx, u.ID, nil)

@@ -13,6 +13,10 @@ func (s *Server) routes() {
 	s.handle("GET /api/auth/config", s.handleAuthConfig, public())
 	s.handle("POST /api/auth/login", s.handleLogin, public())
 	s.handle("POST /api/auth/login/totp", s.handleLoginTOTP, public())
+	s.handle("POST /api/auth/login/webauthn/begin", s.handleLoginWebAuthnBegin, public())
+	s.handle("POST /api/auth/login/webauthn/finish", s.handleLoginWebAuthnFinish, public())
+	s.handle("POST /api/auth/passkey/begin", s.handlePasskeyBegin, public())
+	s.handle("POST /api/auth/passkey/finish", s.handlePasskeyFinish, public())
 	s.handle("GET /api/auth/oidc/start", s.handleOIDCStart, public())
 	s.handle("GET /api/auth/oidc/callback", s.handleOIDCCallback, public())
 	s.handle("GET /api/auth/invite", s.handleInviteInfo, public())
@@ -23,6 +27,9 @@ func (s *Server) routes() {
 	s.handle("POST /api/auth/logout", s.handleLogout, restricted())
 	s.handle("POST /api/auth/totp/setup", s.handleTOTPSetup, restricted())
 	s.handle("POST /api/auth/totp/enable", s.handleTOTPEnable, restricted())
+	s.handle("GET /api/me/webauthn", s.handleWebAuthnList, restricted())
+	s.handle("POST /api/me/webauthn/register/begin", s.handleWebAuthnRegisterBegin, restricted())
+	s.handle("POST /api/me/webauthn/register/finish", s.handleWebAuthnRegisterFinish, restricted())
 
 	// Account.
 	s.handle("POST /api/auth/logout-all", s.handleLogoutAll)
@@ -31,6 +38,7 @@ func (s *Server) routes() {
 	s.handle("GET /api/me/sessions", s.handleMySessions)
 	s.handle("DELETE /api/me/sessions/{id}", s.handleDeleteMySession)
 	s.handle("POST /api/me/oidc/unlink", s.handleOIDCUnlink)
+	s.handle("DELETE /api/me/webauthn/{id}", s.handleWebAuthnDelete)
 
 	// Files.
 	s.handle("GET /api/files", s.handleList)

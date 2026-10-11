@@ -105,7 +105,7 @@
     if (!u) return;
     try {
       await post(`/api/admin/users/${u.id}/reset-totp`);
-      notice = `Two-factor reset for ${u.username}; they must enroll again at next login.`;
+      notice = `Two-factor reset for ${u.username}; they must set it up again at next login if required.`;
     } catch (x) {
       err = errorMessage(x);
     }
@@ -284,13 +284,18 @@
               <td class="hide-mobile"
                 >{#if u.totp_enabled}<span class="badge ok">on</span>{:else}<span class="badge"
                     >off</span
+                  >{/if}
+                {#if u.webauthn_count}<span class="badge ok"
+                    >{u.webauthn_count}
+                    {u.webauthn_count === 1 ? 'key' : 'keys'}</span
                   >{/if}</td
               >
               <td class="hide-mobile small">{u.quota_bytes ? formatSize(u.quota_bytes) : '∞'}</td>
               <td class="actions">
                 <button class="small" onclick={() => startEdit(u)}>Edit</button>
-                {#if u.totp_enabled}<button class="small" onclick={() => (confirmReset = u)}
-                    >Reset 2FA</button
+                {#if u.totp_enabled || u.webauthn_count}<button
+                    class="small"
+                    onclick={() => (confirmReset = u)}>Reset two-factor</button
                   >{/if}
                 {#if u.id !== myId}<button class="small danger" onclick={() => (confirmDelete = u)}
                     >Delete</button
@@ -568,7 +573,10 @@
     onconfirm={resetTOTP}
     onclose={() => (confirmReset = null)}
   >
-    <p>{confirmReset.username} will be logged out and must set up an authenticator again.</p>
+    <p>
+      {confirmReset.username} will be logged out, and their authenticator app and all security keys and
+      passkeys are removed. They must set up two-factor again if their account requires it.
+    </p>
   </ConfirmDialog>
 {/if}
 

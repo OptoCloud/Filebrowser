@@ -16,9 +16,10 @@ import (
 
 type userView struct {
 	*store.User
-	TOTPEnabled bool          `json:"totp_enabled"`
-	HasPassword bool          `json:"has_password"`
-	Grants      []store.Grant `json:"grants"`
+	TOTPEnabled   bool          `json:"totp_enabled"`
+	WebAuthnCount int           `json:"webauthn_count"`
+	HasPassword   bool          `json:"has_password"`
+	Grants        []store.Grant `json:"grants"`
 }
 
 // targetUser loads the user named by the {id} path value.
@@ -42,6 +43,11 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, r, err)
 		return
 	}
+	keys, err := s.store.CountWebAuthn(ctx)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
 	out := make([]userView, 0, len(users))
 	for _, u := range users {
 		g, err := s.store.Grants(ctx, u.ID)
@@ -49,7 +55,8 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			httpx.InternalError(w, r, err)
 			return
 		}
-		out = append(out, userView{User: u, TOTPEnabled: u.TOTPEnabled(), HasPassword: u.PasswordHash != "", Grants: g})
+		out = append(out, userView{User: u, TOTPEnabled: u.TOTPEnabled(), WebAuthnCount: keys[u.ID],
+			HasPassword: u.PasswordHash != "", Grants: g})
 	}
 	httpx.JSON(w, http.StatusOK, out)
 }
@@ -236,7 +243,12 @@ func (s *Server) handleAdminSetGrants(w http.ResponseWriter, r *http.Request) {
 	for _, g := range grants {
 		hasWrite = hasWrite || g.Permission == "write"
 	}
-	if hasWrite && !hadWrite && !target.TOTPEnabled() {
+	totp, keys, err := s.secondFactors(ctx, target)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
+	if hasWrite && !hadWrite && !totp && keys == 0 {
 		if _, err := s.store.DeleteUserSessions(ctx, uid, nil); err != nil {
 			httpx.InternalError(w, r, err)
 			return
@@ -254,7 +266,7 @@ func (s *Server) handleAdminResetTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	uid := target.ID
 	ctx := r.Context()
-	if err := s.store.DisableTOTP(ctx, uid); err != nil {
+	if err := s.store.ResetSecondFactors(ctx, uid); err != nil {
 		httpx.FileError(w, r, err)
 		return
 	}

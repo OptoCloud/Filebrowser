@@ -43,6 +43,17 @@ func (p *pendingLogins) add(userID int64, method string) string {
 	return tok
 }
 
+// peek returns the pending login if still valid, without counting an attempt.
+func (p *pendingLogins) peek(tok string) *pendingLogin {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl := p.m[tok]
+	if pl == nil || time.Now().After(pl.expires) || pl.attempts >= 5 {
+		return nil
+	}
+	return pl
+}
+
 // attempt returns the pending login if still valid, counting an attempt.
 func (p *pendingLogins) attempt(tok string) *pendingLogin {
 	p.mu.Lock()
@@ -150,8 +161,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.loginBackoff.Reset(pairKey)
-	if user.TOTPEnabled() {
-		httpx.JSON(w, http.StatusOK, map[string]any{"totp_required": true, "token": s.pending.add(user.ID, "password")})
+	totp, keys, err := s.secondFactors(ctx, user)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
+	if totp || keys > 0 {
+		httpx.JSON(w, http.StatusOK, map[string]any{"mfa_required": true, "token": s.pending.add(user.ID, "password"),
+			"totp": totp, "webauthn": keys > 0})
 		return
 	}
 	if s.startSession(w, r, user.ID, "password", false) {
@@ -264,17 +281,24 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, r, err)
 		return
 	}
+	keys, err := s.store.WebAuthnCredentials(r.Context(), id.User.ID)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
 	resp := map[string]any{
-		"user":          id.User,
-		"grants":        id.Access.Grants,
-		"can_write":     id.Access.CanWrite(),
-		"totp_enabled":  id.User.TOTPEnabled(),
-		"totp_required": requiresTOTP(id),
-		"restricted":    s.isRestricted(id),
-		"has_password":  id.User.PasswordHash != "",
-		"oidc":          idents,
-		"providers":     s.oidc.Providers(),
-		"share_origin":  s.cfg.ShareOrigin,
+		"user":           id.User,
+		"grants":         id.Access.Grants,
+		"can_write":      id.Access.CanWrite(),
+		"totp_enabled":   id.User.TOTPEnabled(),
+		"webauthn_count": len(keys),
+		"mfa_enabled":    id.User.TOTPEnabled() || len(keys) > 0,
+		"totp_required":  requiresTOTP(id),
+		"restricted":     s.isRestricted(id),
+		"has_password":   id.User.PasswordHash != "",
+		"oidc":           idents,
+		"providers":      s.oidc.Providers(),
+		"share_origin":   s.cfg.ShareOrigin,
 	}
 	if id.User.QuotaBytes > 0 {
 		resp["usage_bytes"] = s.files.Usage(r.Context(), id.User.ID, id.Access)
@@ -363,8 +387,13 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	id := httpx.IdentityFrom(ctx)
-	if requiresTOTP(id) {
-		httpx.Error(w, http.StatusForbidden, "two-factor authentication is required for your account")
+	keys, err := s.store.WebAuthnCredentials(ctx, id.User.ID)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
+	if requiresTOTP(id) && len(keys) == 0 {
+		httpx.Error(w, http.StatusForbidden, "two-factor authentication is required for your account: add a security key first")
 		return
 	}
 	if !id.User.TOTPEnabled() {
@@ -546,9 +575,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trust := s.oidc.TrustMFA(ident.Provider)
-	if !trust && user.TOTPEnabled() {
+	totp, keys, err := s.secondFactors(ctx, user)
+	if err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
+	if !trust && (totp || keys > 0) {
 		tok := s.pending.add(user.ID, "oidc")
-		http.Redirect(w, r, "/login?totp="+url.QueryEscape(tok), http.StatusFound)
+		http.Redirect(w, r, "/login?mfa="+url.QueryEscape(tok)+"&methods="+strings.Join(methods(totp, keys), ","), http.StatusFound)
 		return
 	}
 	if !s.startSession(w, r, user.ID, "oidc", trust) {
