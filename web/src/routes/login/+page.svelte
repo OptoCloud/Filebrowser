@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation';
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { errorMessage, get, post } from '#lib/api.js';
-  import type { Provider } from '#lib/types.js';
+  import { errorMessage, post } from '#lib/api.js';
+  import { safeNext } from '#lib/nav.js';
+
+  let { data } = $props();
 
   const errors: Record<string, string> = {
     oidc_failed: 'Single sign-on failed. Please try again.',
@@ -16,23 +18,13 @@
   let totpToken = $state(page.url.searchParams.get('totp') ?? '');
   let err = $state(errors[page.url.searchParams.get('error') ?? ''] ?? '');
   let busy = $state(false);
-  let providers = $state<Provider[]>([]);
-
-  $effect(() => {
-    get<{ oidc: Provider[] }>('/api/auth/config')
-      .then((c) => (providers = c.oidc ?? []))
-      .catch(() => {});
-  });
-
-  function next(): string {
-    const n = page.url.searchParams.get('next') ?? '';
-    // Only allow local paths.
-    return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/\\') ? n : '/files';
-  }
+  const providers = $derived(data.providers);
 
   async function done() {
-    await invalidateAll();
-    goto(next());
+    // Same-origin targets only: ?next= must not turn the login into an open redirect.
+    await goto(safeNext(page.url.searchParams.get('next'), location.origin), {
+      invalidateAll: true,
+    });
   }
 
   async function login(e: Event) {

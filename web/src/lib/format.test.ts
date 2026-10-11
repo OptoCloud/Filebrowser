@@ -7,6 +7,7 @@ import {
   joinPath,
   kindOf,
   parentPath,
+  pathCrumbs,
   thumbable,
 } from './format.js';
 
@@ -34,6 +35,14 @@ describe('path helpers', () => {
     expect(baseName('c.txt')).toBe('c.txt');
     expect(joinPath('', 'x')).toBe('x');
     expect(joinPath('a/b', 'x')).toBe('a/b/x');
+  });
+
+  it('builds breadcrumbs', () => {
+    expect(pathCrumbs('')).toEqual([]);
+    expect(pathCrumbs('a/b')).toEqual([
+      { name: 'a', path: 'a' },
+      { name: 'b', path: 'a/b' },
+    ]);
   });
 
   it('builds encoded /files URLs', () => {

@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { page } from '$app/state';
   import { del, errorMessage, get, qs } from '#lib/api.js';
   import { filesHref, formatDate, parentPath } from '#lib/format.js';
-  import { session } from '#lib/session.svelte.js';
+  import { LatestRequest } from '#lib/latest.js';
   import type { Share } from '#lib/types.js';
-  import Modal from '#lib/components/Modal.svelte';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 
   let shares = $state<Share[]>([]);
   let loaded = $state(false);
@@ -11,24 +12,30 @@
   let all = $state(false);
   let showInactive = $state(false);
   let revoking = $state<Share | null>(null);
+  const req = new LatestRequest();
 
-  const isAdmin = $derived(session.me?.user.role === 'admin');
+  const isAdmin = $derived(page.data.me?.user.role === 'admin');
   const visible = $derived(showInactive ? shares : shares.filter((s) => s.active));
 
+  // Toggling "All users" quickly must not let the older response win.
   async function load() {
+    const signal = req.next();
     err = '';
     try {
-      shares = (await get<Share[] | null>('/api/shares' + qs({ all }))) ?? [];
+      const list = await get<Share[] | null>('/api/shares' + qs({ all }), { signal });
+      if (signal.aborted) return;
+      shares = list ?? [];
     } catch (e) {
+      if (signal.aborted) return;
       err = errorMessage(e);
-    } finally {
-      loaded = true;
     }
+    loaded = true;
   }
 
   $effect(() => {
     void all;
     load();
+    return () => req.abort();
   });
 
   async function revoke() {
@@ -120,13 +127,14 @@
 </div>
 
 {#if revoking}
-  <Modal title="Revoke link?" onclose={() => (revoking = null)}>
+  <ConfirmDialog
+    title="Revoke link?"
+    confirmLabel="Revoke"
+    onconfirm={revoke}
+    onclose={() => (revoking = null)}
+  >
     <p>The link for "{revoking.name}" will stop working immediately.</p>
-    {#snippet footer()}
-      <button onclick={() => (revoking = null)}>Cancel</button>
-      <button class="danger solid" onclick={revoke}>Revoke</button>
-    {/snippet}
-  </Modal>
+  </ConfirmDialog>
 {/if}
 
 <style>

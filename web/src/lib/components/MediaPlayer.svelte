@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { untrack } from 'svelte';
   import { ApiError, errorMessage, get, post, qs } from '#lib/api.js';
   import { playbackCaps } from '#lib/caps.js';
+  import { LatestRequest } from '#lib/latest.js';
   import type { Job, Plan } from '#lib/types.js';
   import CopyField from './CopyField.svelte';
   import Icon from './Icon.svelte';
@@ -18,7 +19,8 @@
   let externalURL = $state('');
   let externalErr = $state('');
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let token = 0;
+  // One load (info → prepare → polling) at a time; a new one supersedes it.
+  const req = new LatestRequest();
 
   const directURL = $derived('/api/files/download' + qs({ path, inline: 1 }));
   const pct = $derived(Math.round((job?.progress ?? 0) * 100));
@@ -28,7 +30,7 @@
   }
 
   async function load(audio: number) {
-    const my = ++token;
+    const signal = req.next();
     clearTimeout(timer);
     status = 'loading';
     src = '';
@@ -37,9 +39,10 @@
     try {
       const res = await get<{ plan: Plan; job?: Job }>(
         '/api/media/info' +
-          qs({ path, caps: playbackCaps(), audio: audio >= 0 ? audio : undefined })
+          qs({ path, caps: playbackCaps(), audio: audio >= 0 ? audio : undefined }),
+        { signal }
       );
-      if (my !== token) return;
+      if (signal.aborted) return;
       plan = res.plan;
       audioIdx = res.plan.audio_index;
       if (plan.mode === 'direct') {
@@ -50,14 +53,14 @@
           src = streamURL(plan.variant!);
           status = 'ready';
         } else {
-          await prepare(my);
+          await prepare(signal);
         }
       } else {
         status = 'external';
         message = plan.reason || 'This file cannot be played in the browser.';
       }
     } catch (err) {
-      if (my !== token) return;
+      if (signal.aborted) return;
       // No probe (ffprobe missing or unreadable file): try the file as is.
       if (err instanceof ApiError && (err.status === 422 || err.status === 501)) {
         plan = null;
@@ -70,23 +73,26 @@
     }
   }
 
-  async function prepare(my: number) {
+  async function prepare(signal: AbortSignal) {
     if (!plan?.variant) return;
     status = 'preparing';
     try {
-      job = await post<Job>('/api/media/prepare', { path, variant: plan.variant });
-      poll(my);
+      const j = await post<Job>('/api/media/prepare', { path, variant: plan.variant }, { signal });
+      if (signal.aborted) return;
+      job = j;
+      poll(signal);
     } catch (err) {
-      if (my !== token) return;
+      if (signal.aborted) return;
       status = 'error';
       message = errorMessage(err);
     }
   }
 
-  function poll(my: number) {
-    if (my !== token || !job || !plan?.variant) return;
+  function poll(signal: AbortSignal) {
+    if (signal.aborted || !job || !plan?.variant) return;
+    const variant = plan.variant;
     if (job.state === 'done') {
-      src = streamURL(plan.variant);
+      src = streamURL(variant);
       status = 'ready';
       return;
     }
@@ -96,15 +102,18 @@
       return;
     }
     timer = setTimeout(async () => {
+      let j: Job;
       try {
-        job = await get<Job>('/api/media/job' + qs({ path, variant: plan!.variant! }));
+        j = await get<Job>('/api/media/job' + qs({ path, variant }), { signal });
       } catch (err) {
-        if (my !== token) return;
+        if (signal.aborted) return;
         status = 'error';
         message = errorMessage(err);
         return;
       }
-      poll(my);
+      if (signal.aborted) return;
+      job = j;
+      poll(signal);
     }, 1500);
   }
 
@@ -129,12 +138,11 @@
 
   $effect(() => {
     void path;
-    load(-1);
-  });
-
-  onDestroy(() => {
-    token++;
-    clearTimeout(timer);
+    untrack(() => load(-1));
+    return () => {
+      req.abort();
+      clearTimeout(timer);
+    };
   });
 </script>
 

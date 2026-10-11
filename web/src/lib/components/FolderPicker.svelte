@@ -1,6 +1,7 @@
 <script lang="ts">
   import { errorMessage, get, qs } from '#lib/api.js';
-  import { baseName, parentPath } from '#lib/format.js';
+  import { baseName, parentPath, pathCrumbs } from '#lib/format.js';
+  import { LatestRequest } from '#lib/latest.js';
   import type { Listing } from '#lib/types.js';
   import Icon from './Icon.svelte';
   import Modal from './Modal.svelte';
@@ -22,26 +23,32 @@
   let dir = $state('');
   let listing = $state<Listing | null>(null);
   let err = $state('');
+  const req = new LatestRequest();
 
-  async function open(p: string) {
-    err = '';
+  // Falls back to Home when p cannot be opened, keeping that error visible.
+  async function open(p: string, fallbackErr = '') {
+    const signal = req.next();
     try {
-      listing = await get<Listing>('/api/files' + qs({ path: p }));
+      const l = await get<Listing>('/api/files' + qs({ path: p }), { signal });
+      if (signal.aborted) return;
+      listing = l;
       dir = p;
+      err = fallbackErr;
     } catch (e) {
-      err = errorMessage(e);
-      if (p !== '') open('');
+      if (signal.aborted) return;
+      if (p !== '') open('', errorMessage(e));
+      else err = errorMessage(e);
     }
   }
 
   $effect(() => {
     open(start);
+    return () => req.abort();
   });
 
   const dirs = $derived(
     listing ? listing.entries.filter((e) => e.is_dir && !exclude.includes(e.path)) : []
   );
-  const crumbs = $derived(dir ? dir.split('/') : []);
   const canPick = $derived(
     listing?.permission === 'write' && !exclude.some((x) => dir === x || dir.startsWith(x + '/'))
   );
@@ -50,10 +57,9 @@
 <Modal {title} {onclose}>
   <div class="crumbs small">
     <button class="small ghost" onclick={() => open('')}>Home</button>
-    {#each crumbs as c, i (i)}
+    {#each pathCrumbs(dir) as c (c.path)}
       <span class="muted">/</span>
-      <button class="small ghost" onclick={() => open(crumbs.slice(0, i + 1).join('/'))}>{c}</button
-      >
+      <button class="small ghost" onclick={() => open(c.path)}>{c.name}</button>
     {/each}
   </div>
   {#if err}<div class="error">{err}</div>{/if}

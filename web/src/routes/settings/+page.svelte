@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation';
+  import { goto, invalidate, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
-  import { del, errorMessage, get, post } from '#lib/api.js';
+  import { del, errorMessage, logout, post } from '#lib/api.js';
   import { formatDate, formatSize } from '#lib/format.js';
-  import { session } from '#lib/session.svelte.js';
   import type { Session } from '#lib/types.js';
   import Modal from '#lib/components/Modal.svelte';
 
-  const me = $derived(session.me);
+  let { data } = $props();
+
+  const me = $derived(page.data.me);
   const notices: Record<string, string> = {
     oidc_already_linked: 'That single sign-on account is already linked to another user.',
   };
@@ -39,8 +40,8 @@
       await post('/api/me/password', { current, code: pwCode, new: pw1 });
       current = pwCode = pw1 = pw2 = '';
       pwMsg = 'Password changed. Other sessions were logged out.';
+      // Reloads the account and the session list.
       await invalidateAll();
-      loadSessions();
     } catch (x) {
       pwErr = errorMessage(x);
     }
@@ -66,44 +67,23 @@
     }
   }
 
-  // Sessions
-  let sessions = $state<Session[]>([]);
-  let sessErr = $state('');
-
-  async function loadSessions() {
-    try {
-      sessions = (await get<Session[] | null>('/api/me/sessions')) ?? [];
-    } catch (x) {
-      sessErr = errorMessage(x);
-    }
-  }
-
-  $effect(() => {
-    loadSessions();
-  });
+  // Sessions (loaded by +page.ts)
+  const sessions = $derived(data.sessions);
+  let revokeErr = $state('');
+  const sessErr = $derived(revokeErr || data.sessionsError);
 
   async function revoke(s: Session) {
+    revokeErr = '';
     try {
       await del('/api/me/sessions/' + s.id);
       if (s.current) {
-        await invalidateAll();
-        goto('/login');
+        await goto('/login', { invalidateAll: true });
         return;
       }
     } catch (x) {
-      sessErr = errorMessage(x);
+      revokeErr = errorMessage(x);
     }
-    loadSessions();
-  }
-
-  async function logoutAll() {
-    try {
-      await post('/api/auth/logout-all');
-    } catch {
-      /* ignore */
-    }
-    await invalidateAll();
-    goto('/login');
+    invalidate('app:sessions');
   }
 
   async function unlink(issuer: string, subject: string) {
@@ -258,7 +238,9 @@
       <div class="row">
         <h2 class="first">Sessions</h2>
         <span class="spacer"></span>
-        <button class="small danger" onclick={logoutAll}>Log out everywhere</button>
+        <button class="small danger" onclick={() => logout('/api/auth/logout-all')}
+          >Log out everywhere</button
+        >
       </div>
       {#if sessErr}<div class="error">{sessErr}</div>{/if}
       <ul class="plain">

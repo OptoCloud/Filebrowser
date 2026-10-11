@@ -59,19 +59,28 @@ export function handleAuthError(err: unknown): boolean {
   return false;
 }
 
+export interface RequestOptions {
+  /** Redirect to the login / 2FA page on authentication errors (default true). */
+  redirectOnAuth?: boolean;
+  /** Aborts the request (see LatestRequest). */
+  signal?: AbortSignal;
+  /** The fetch to use, e.g. the one SvelteKit passes to load functions. */
+  fetch?: typeof fetch;
+}
+
 export async function request<T = unknown>(
   method: string,
   url: string,
   body?: unknown,
-  opts: { redirectOnAuth?: boolean } = {}
+  opts: RequestOptions = {}
 ): Promise<T> {
   const headers: Record<string, string> = {};
-  const init: RequestInit = { method, credentials: 'same-origin', headers };
+  const init: RequestInit = { method, credentials: 'same-origin', headers, signal: opts.signal };
   if (body !== undefined) {
     init.body = JSON.stringify(body);
     headers['Content-Type'] = 'application/json';
   }
-  const res = await fetch(url, init);
+  const res = await (opts.fetch ?? fetch)(url, init);
   if (!res.ok) {
     const err = await toError(res);
     if (opts.redirectOnAuth !== false) handleAuthError(err);
@@ -82,11 +91,23 @@ export async function request<T = unknown>(
   return (await res.json()) as T;
 }
 
-export const get = <T>(url: string) => request<T>('GET', url);
-export const post = <T>(url: string, body?: unknown) => request<T>('POST', url, body ?? {});
+export const get = <T>(url: string, opts?: RequestOptions) =>
+  request<T>('GET', url, undefined, opts);
+export const post = <T>(url: string, body?: unknown, opts?: RequestOptions) =>
+  request<T>('POST', url, body ?? {}, opts);
 export const put = <T>(url: string, body: unknown) => request<T>('PUT', url, body);
 export const patch = <T>(url: string, body: unknown) => request<T>('PATCH', url, body);
 export const del = <T>(url: string) => request<T>('DELETE', url);
+
+/** Ends the session (best effort) and goes to the login page with fresh data. */
+export async function logout(endpoint = '/api/auth/logout') {
+  try {
+    await post(endpoint);
+  } catch {
+    /* the session may already be gone */
+  }
+  await goto('/login', { invalidateAll: true });
+}
 
 export function qs(
   params: Record<string, string | number | boolean | undefined | null | string[]>

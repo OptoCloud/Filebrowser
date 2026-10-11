@@ -1,31 +1,26 @@
 <script lang="ts">
   import '../app.css';
-  import { goto, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
-  import { post } from '#lib/api.js';
-  import { session } from '#lib/session.svelte.js';
+  import { logout } from '#lib/api.js';
+  import { appUploader } from '#lib/upload.svelte.js';
   import Icon from '#lib/components/Icon.svelte';
+  import UploadPanel from '#lib/components/UploadPanel.svelte';
 
   let { data, children } = $props();
-
-  // Pre-effect so pages see the user on their first render.
-  $effect.pre(() => {
-    session.me = data.me;
-  });
 
   const me = $derived(data.me);
   const shareMode = $derived(page.url.pathname.startsWith('/s/'));
   let menuOpen = $state(false);
 
-  async function logout() {
-    try {
-      await post('/api/auth/logout');
-    } catch {
-      /* the session may already be gone */
-    }
-    session.me = null;
-    await invalidateAll();
-    goto('/login');
+  function signOut() {
+    appUploader.cancelAll();
+    appUploader.clearFinished();
+    logout();
+  }
+
+  // Closing the tab would abort running uploads (only ever started on the app origin).
+  function onbeforeunload(e: BeforeUnloadEvent) {
+    if (appUploader.busy) e.preventDefault();
   }
 
   function active(prefix: string) {
@@ -61,11 +56,14 @@
       <a href="/settings" class:active={active('/settings')} onclick={() => (menuOpen = false)}
         >{me.user.username}</a
       >
-      <button class="small" onclick={logout}>Log out</button>
+      <button class="small" onclick={signOut}>Log out</button>
     </div>
   </nav>
   {@render children()}
+  <UploadPanel uploader={appUploader} />
 {/if}
+
+<svelte:window {onbeforeunload} />
 
 <style>
   .top {

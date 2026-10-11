@@ -1,23 +1,19 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation';
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { errorMessage, get, post, qs } from '#lib/api.js';
+  import { errorMessage, post } from '#lib/api.js';
   import { formatDate } from '#lib/format.js';
 
+  let { data } = $props();
+
   const token = $derived(page.params.token ?? '');
-  let info = $state<{ role: string; expires_at: string } | null>(null);
-  let loadErr = $state('');
+  const info = $derived(data.info);
+  const loadErr = $derived(data.loadError);
   let username = $state('');
   let password = $state('');
   let password2 = $state('');
   let err = $state('');
   let busy = $state(false);
-
-  $effect(() => {
-    get<{ role: string; expires_at: string }>('/api/auth/invite' + qs({ token }))
-      .then((i) => (info = i))
-      .catch((e) => (loadErr = errorMessage(e)));
-  });
 
   async function accept(e: Event) {
     e.preventDefault();
@@ -29,8 +25,7 @@
     busy = true;
     try {
       await post('/api/auth/invite/accept', { token, username, password });
-      await invalidateAll();
-      goto('/files');
+      await goto('/files', { invalidateAll: true });
     } catch (x) {
       err = errorMessage(x);
     } finally {

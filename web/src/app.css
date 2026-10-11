@@ -311,6 +311,32 @@ table.data tr:last-child td {
   color: var(--accent);
 }
 
+/* Full-screen file viewer: a modal <dialog> (top layer) covering the page. */
+dialog.viewer {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: rgba(8, 10, 14, 0.94);
+  color: #eee;
+}
+dialog.viewer[open] {
+  display: flex;
+  flex-direction: column;
+}
+dialog.viewer::backdrop {
+  background: transparent;
+}
+dialog.viewer > header .btn,
+dialog.viewer > header .icon {
+  color: #eee;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
 @media (max-width: 640px) {
   .hide-mobile {
     display: none !important;

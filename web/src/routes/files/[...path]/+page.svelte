@@ -4,15 +4,18 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { download, errorMessage, get, post, postForm, qs } from '#lib/api.js';
-  import { filesHref, formatDate, formatSize, kindOf, parentPath, thumbable } from '#lib/format.js';
+  import { filesHref, formatDate, formatSize, parentPath, pathCrumbs } from '#lib/format.js';
+  import { LatestRequest } from '#lib/latest.js';
   import type { Entry, Listing } from '#lib/types.js';
-  import { Uploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
+  import { appUploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import EntryIcon from '#lib/components/EntryIcon.svelte';
+  import EntryThumb from '#lib/components/EntryThumb.svelte';
   import FolderPicker from '#lib/components/FolderPicker.svelte';
   import Icon from '#lib/components/Icon.svelte';
   import Modal from '#lib/components/Modal.svelte';
   import Preview from '#lib/components/Preview.svelte';
   import ShareDialog from '#lib/components/ShareDialog.svelte';
-  import UploadPanel from '#lib/components/UploadPanel.svelte';
 
   type SortKey = 'name' | 'size' | 'mtime';
 
@@ -32,8 +35,10 @@
   let results = $state<Entry[] | null>(null);
   let truncated = $state(false);
   let searching = $state(false);
+  let searchingFor = '';
 
-  let previewIndex = $state<number | null>(null);
+  // Path of the previewed file (an index would jump when the listing changes).
+  let previewPath = $state<string | null>(null);
   let mkdirOpen = $state(false);
   let newName = $state('');
   let renameEntry = $state<Entry | null>(null);
@@ -41,16 +46,12 @@
   let shareEntry = $state<Entry | null>(null);
   let confirmDelete = $state(false);
   let dragging = $state(0);
-  const failedThumbs = new SvelteSet<string>();
 
   let fileInput: HTMLInputElement | undefined = $state();
   let dirInput: HTMLInputElement | undefined = $state();
 
-  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
-  const uploader = new Uploader('/api/uploads/', {}, () => {
-    clearTimeout(reloadTimer);
-    reloadTimer = setTimeout(() => load(path, true), 400);
-  });
+  const listReq = new LatestRequest();
+  const searchReq = new LatestRequest();
 
   function loadPref(k: string, d: string): string {
     try {
@@ -68,19 +69,19 @@
   }
 
   async function load(p: string, quiet = false) {
+    const signal = listReq.next();
     if (!quiet) loading = true;
     err = '';
     try {
-      const l = await get<Listing>('/api/files' + qs({ path: p }));
-      if (p === path) listing = l;
+      const l = await get<Listing>('/api/files' + qs({ path: p }), { signal });
+      if (signal.aborted) return;
+      listing = l;
     } catch (e) {
-      if (p === path) {
-        listing = null;
-        err = errorMessage(e);
-      }
-    } finally {
-      if (p === path) loading = false;
+      if (signal.aborted) return;
+      listing = null;
+      err = errorMessage(e);
     }
+    loading = false;
   }
 
   $effect(() => {
@@ -90,13 +91,29 @@
       anchor = -1;
       results = null;
       query = '';
-      previewIndex = null;
+      previewPath = null;
       load(p);
     });
+    // Leaving the folder drops its pending listing and search.
+    return () => {
+      listReq.abort();
+      searchReq.abort();
+      searching = false;
+    };
   });
 
+  // Uploads outlive this page (see appUploader); refresh when one lands here.
   $effect(() => {
-    if (dirInput) dirInput.webkitdirectory = true;
+    let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+    const off = appUploader.onFileDone((item) => {
+      if (item.dir !== path) return;
+      clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => load(path, true), 400);
+    });
+    return () => {
+      off();
+      clearTimeout(reloadTimer);
+    };
   });
 
   const writable = $derived(listing?.permission === 'write');
@@ -113,7 +130,7 @@
       return c * dir;
     });
   });
-  const crumbs = $derived(path ? path.split('/') : []);
+  const crumbs = $derived(pathCrumbs(path));
   const selection = $derived(entries.filter((e) => selected.has(e.path)));
   // In a traverse-only directory every child is a grant root (or leads to one).
   const canModifySelection = $derived(
@@ -149,9 +166,9 @@
     else entries.forEach((e) => selected.add(e.path));
   }
 
-  function openEntry(e: Entry, i: number) {
+  function openEntry(e: Entry) {
     if (e.is_dir) goto(filesHref(e.path));
-    else previewIndex = i;
+    else previewPath = e.path;
   }
 
   async function act(fn: () => Promise<unknown>) {
@@ -208,26 +225,36 @@
     e?.preventDefault();
     const q = query.trim();
     if (q.length < 2) {
+      searchReq.abort();
+      searching = false;
       results = null;
       return;
     }
+    // Submitted again for the same query: the running search will answer.
+    if (e && searching && q === searchingFor) return;
+    const signal = searchReq.next();
     searching = true;
+    searchingFor = q;
     actionErr = '';
     try {
       const r = await get<{ results: Entry[]; truncated: boolean }>(
-        '/api/search' + qs({ q, path })
+        '/api/search' + qs({ q, path }),
+        { signal }
       );
+      if (signal.aborted) return;
       results = r.results;
       truncated = r.truncated;
       selected.clear();
     } catch (x) {
+      if (signal.aborted) return;
       actionErr = errorMessage(x);
-    } finally {
-      searching = false;
     }
+    searching = false;
   }
 
   function clearSearch() {
+    searchReq.abort();
+    searching = false;
     query = '';
     results = null;
     selected.clear();
@@ -249,23 +276,18 @@
     if (!writable || !e.dataTransfer) return;
     e.preventDefault();
     const files = await filesFromDrop(e.dataTransfer);
-    if (files.length) uploader.add(files, path);
+    if (files.length) appUploader.add(files, path);
   }
 
   function pick(input: HTMLInputElement | undefined) {
     if (!input) return;
     const files = filesFromInput(input.files);
-    if (files.length) uploader.add(files, path);
+    if (files.length) appUploader.add(files, path);
     input.value = '';
-  }
-
-  function iconFor(e: Entry): string {
-    const k = kindOf(e);
-    return k === 'dir' ? 'folder' : k === 'file' ? 'file' : k;
   }
 </script>
 
-<svelte:head><title>{path ? path.split('/').pop() : 'Files'}</title></svelte:head>
+<svelte:head><title>{crumbs.at(-1)?.name ?? 'Files'}</title></svelte:head>
 
 <div
   class="browser"
@@ -279,9 +301,9 @@
   <div class="toolbar">
     <nav class="crumbs" aria-label="Breadcrumbs">
       <a href="/files">Home</a>
-      {#each crumbs as c, i (i)}
+      {#each crumbs as c (c.path)}
         <span class="muted">/</span>
-        <a href={filesHref(crumbs.slice(0, i + 1).join('/'))}>{c}</a>
+        <a href={filesHref(c.path)}>{c.name}</a>
       {/each}
       {#if listing && listing.permission !== 'write'}
         <span class="badge">{listing.permission === 'read' ? 'read-only' : 'browse'}</span>
@@ -336,7 +358,7 @@
           class="small"
           onclick={() =>
             (shareEntry = {
-              name: crumbs[crumbs.length - 1] ?? 'Home',
+              name: crumbs.at(-1)?.name ?? 'Home',
               path,
               is_dir: true,
               size: 0,
@@ -365,7 +387,14 @@
     </div>
   </div>
   <input type="file" multiple hidden bind:this={fileInput} onchange={() => pick(fileInput)} />
-  <input type="file" multiple hidden bind:this={dirInput} onchange={() => pick(dirInput)} />
+  <input
+    type="file"
+    multiple
+    webkitdirectory
+    hidden
+    bind:this={dirInput}
+    onchange={() => pick(dirInput)}
+  />
 
   {#if results !== null}
     <div class="notice row">
@@ -431,8 +460,8 @@
                 /></td
               >
               <td>
-                <button class="name ghost" onclick={() => openEntry(e, i)}>
-                  <span class="ic" class:dir={e.is_dir}><Icon name={iconFor(e)} size={20} /></span>
+                <button class="name ghost" onclick={() => openEntry(e)}>
+                  <EntryIcon entry={e} />
                   <span class="label">
                     {e.name}
                     {#if results !== null}<span class="muted small path"
@@ -472,19 +501,8 @@
             onclick={(ev) => toggle(e, i, ev)}
             aria-label={'Select ' + e.name}
           />
-          <button class="ghost tbtn" onclick={() => openEntry(e, i)} title={e.name}>
-            <div class="thumb">
-              {#if thumbable(e) && !failedThumbs.has(e.path)}
-                <img
-                  loading="lazy"
-                  alt=""
-                  src={'/api/thumb' + qs({ path: e.path, v: e.mtime })}
-                  onerror={() => failedThumbs.add(e.path)}
-                />
-              {:else}
-                <span class="ic" class:dir={e.is_dir}><Icon name={iconFor(e)} size={48} /></span>
-              {/if}
-            </div>
+          <button class="ghost tbtn" onclick={() => openEntry(e)} title={e.name}>
+            <EntryThumb entry={e} src={'/api/thumb' + qs({ path: e.path, v: e.mtime })} />
             <div class="tname">{e.name}</div>
           </button>
         </div>
@@ -502,10 +520,8 @@
   {/if}
 </div>
 
-<UploadPanel {uploader} />
-
-{#if previewIndex !== null}
-  <Preview {entries} bind:index={previewIndex} onclose={() => (previewIndex = null)} />
+{#if previewPath !== null}
+  <Preview {entries} bind:path={previewPath} onclose={() => (previewPath = null)} />
 {/if}
 
 {#if mkdirOpen}
@@ -556,16 +572,17 @@
 {/if}
 
 {#if confirmDelete}
-  <Modal title="Move to trash?" onclose={() => (confirmDelete = false)}>
+  <ConfirmDialog
+    title="Move to trash?"
+    confirmLabel="Move to trash"
+    onconfirm={remove}
+    onclose={() => (confirmDelete = false)}
+  >
     <p>
       {selection.length === 1 ? `"${selection[0].name}"` : `${selection.length} items`} will be moved
       to the trash. You can restore them from the Trash page.
     </p>
-    {#snippet footer()}
-      <button onclick={() => (confirmDelete = false)}>Cancel</button>
-      <button class="danger solid" onclick={remove}>Move to trash</button>
-    {/snippet}
-  </Modal>
+  </ConfirmDialog>
 {/if}
 
 <style>
@@ -654,13 +671,6 @@
     flex-direction: column;
     word-break: break-word;
   }
-  .ic {
-    color: var(--muted);
-    display: inline-flex;
-  }
-  .ic.dir {
-    color: #e0a526;
-  }
   .empty {
     text-align: center;
     padding: 4rem 1rem;
@@ -701,19 +711,6 @@
     border: none;
     border-radius: 0;
     white-space: normal;
-  }
-  .thumb {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--surface-2);
-    overflow: hidden;
-  }
-  .thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
   }
   .tname {
     padding: 0.4rem 0.5rem;

@@ -46,6 +46,13 @@ export function baseName(p: string): string {
   return i < 0 ? p : p.slice(i + 1);
 }
 
+/** Breadcrumbs for a slash-separated path: one { name, path } per segment. */
+export function pathCrumbs(p: string): { name: string; path: string }[] {
+  if (!p) return [];
+  const parts = p.split('/');
+  return parts.map((name, i) => ({ name, path: parts.slice(0, i + 1).join('/') }));
+}
+
 export function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }

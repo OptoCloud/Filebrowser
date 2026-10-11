@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { modal } from '#lib/dialog.js';
   import Icon from './Icon.svelte';
 
   let {
@@ -16,48 +17,46 @@
     wide?: boolean;
   } = $props();
 
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onclose();
-  }
+  const id = $props.id();
+  // Close on a click on the backdrop, but not when a drag merely ends there.
+  let downOnBackdrop = false;
 </script>
 
-<svelte:window {onkeydown} />
-
-<div
-  class="backdrop"
-  role="presentation"
-  onclick={(e) => e.target === e.currentTarget && onclose()}
+<!-- Escape is handled by the dialog's cancel event; the backdrop click is a mouse-only shortcut. -->
+<dialog
+  class="modal"
+  class:wide
+  aria-labelledby={id}
+  {@attach modal(() => onclose())}
+  onpointerdown={(e) => (downOnBackdrop = e.target === e.currentTarget)}
+  onclick={(e) => downOnBackdrop && e.target === e.currentTarget && onclose()}
 >
-  <div class="modal" class:wide role="dialog" aria-modal="true" aria-label={title}>
-    <header>
-      <h3>{title}</h3>
-      <button class="icon" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
-    </header>
-    <div class="body">{@render children()}</div>
-    {#if footer}<footer>{@render footer()}</footer>{/if}
-  </div>
-</div>
+  <header>
+    <h3 {id}>{title}</h3>
+    <button class="icon" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
+  </header>
+  <div class="body">{@render children()}</div>
+  {#if footer}<footer>{@render footer()}</footer>{/if}
+</dialog>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--overlay);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-    padding: 1rem;
-  }
   .modal {
+    border: none;
+    padding: 0;
     background: var(--surface);
+    color: var(--text);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
-    width: 100%;
+    width: calc(100% - 2rem);
     max-width: 460px;
     max-height: calc(100vh - 2rem);
+  }
+  .modal[open] {
     display: flex;
     flex-direction: column;
+  }
+  .modal::backdrop {
+    background: var(--overlay, rgba(10, 12, 16, 0.55));
   }
   .modal.wide {
     max-width: 760px;

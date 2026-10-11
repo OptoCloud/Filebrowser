@@ -1,48 +1,69 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { errorMessage, post, qs } from '#lib/api.js';
+  import { modal } from '#lib/dialog.js';
   import { TEXT_PREVIEW_MAX, formatSize, isViewableImage, kindOf } from '#lib/format.js';
   import type { Entry } from '#lib/types.js';
   import Icon from './Icon.svelte';
   import MediaPlayer from './MediaPlayer.svelte';
 
+  // The previewed entry is tracked by path, so a reloaded or re-sorted listing
+  // keeps showing the same file.
   let {
     entries,
-    index = $bindable(),
+    path = $bindable(),
     onclose,
-  }: { entries: Entry[]; index: number; onclose: () => void } = $props();
+  }: { entries: Entry[]; path: string | null; onclose: () => void } = $props();
 
-  const entry = $derived(entries[index]);
+  const index = $derived(entries.findIndex((e) => e.path === path));
+  const entry = $derived<Entry | undefined>(entries[index]);
   const kind = $derived(entry ? kindOf(entry) : 'file');
+  const fileCount = $derived(entries.reduce((n, e) => n + (e.is_dir ? 0 : 1), 0));
   const downloadURL = $derived(entry ? '/api/files/download' + qs({ path: entry.path }) : '');
   const inlineURL = $derived(
     entry ? '/api/files/download' + qs({ path: entry.path, inline: 1 }) : ''
   );
+  // Changes only when the file itself does, not when the listing is reloaded.
+  const entryKey = $derived(entry ? `${entry.path}|${entry.mtime}` : '');
 
   let text = $state<string | null>(null);
   let pdfURL = $state('');
   let err = $state('');
 
+  // The file was deleted or moved away by a reload.
   $effect(() => {
-    const e = entry;
+    if (!entry) onclose();
+  });
+
+  $effect(() => {
+    void entryKey;
+    const e = untrack(() => entry);
     text = null;
     pdfURL = '';
     err = '';
     if (!e) return;
+    const ctrl = new AbortController();
+    const { signal } = ctrl;
+    const fail = (x: unknown) => {
+      if (!signal.aborted) err = errorMessage(x);
+    };
     const k = kindOf(e);
     if (k === 'text' && e.size <= TEXT_PREVIEW_MAX) {
-      fetch('/api/files/download' + qs({ path: e.path }), { credentials: 'same-origin' })
+      fetch('/api/files/download' + qs({ path: e.path }), { credentials: 'same-origin', signal })
         .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
         .then((t) => {
-          if (entry === e) text = t;
+          if (!signal.aborted) text = t;
         })
-        .catch((x) => (err = errorMessage(x)));
+        .catch(fail);
     } else if (k === 'pdf') {
-      post<{ url: string }>('/api/files/preview-url', { path: e.path })
+      post<{ url: string }>('/api/files/preview-url', { path: e.path }, { signal })
         .then((r) => {
-          if (entry === e) pdfURL = r.url;
+          if (!signal.aborted) pdfURL = r.url;
         })
-        .catch((x) => (err = errorMessage(x)));
+        .catch(fail);
     }
+    // Skipping on to another file cancels this one's download.
+    return () => ctrl.abort();
   });
 
   function step(d: number) {
@@ -50,17 +71,18 @@
     for (let i = 1; i < n; i++) {
       const j = (index + d * i + n) % n;
       if (!entries[j].is_dir) {
-        index = j;
+        path = entries[j].path;
         return;
       }
     }
   }
 
+  // Escape is the dialog's cancel event; arrows step unless a control or media
+  // element (seeking) wants them.
   function onkeydown(e: KeyboardEvent) {
-    const t = e.target as HTMLElement;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'VIDEO')) return;
-    if (e.key === 'Escape') onclose();
-    else if (e.key === 'ArrowLeft') step(-1);
+    const t = e.target as HTMLElement | null;
+    if (t && ['INPUT', 'SELECT', 'TEXTAREA', 'VIDEO', 'AUDIO'].includes(t.tagName)) return;
+    if (e.key === 'ArrowLeft') step(-1);
     else if (e.key === 'ArrowRight') step(1);
   }
 </script>
@@ -68,7 +90,7 @@
 <svelte:window {onkeydown} />
 
 {#if entry}
-  <div class="overlay" role="dialog" aria-modal="true" aria-label={entry.name}>
+  <dialog class="viewer" aria-label={entry.name} {@attach modal(() => onclose())}>
     <header>
       <span class="title" title={entry.name}>{entry.name}</span>
       <span class="muted small hide-mobile">{formatSize(entry.size)}</span>
@@ -79,7 +101,7 @@
       <button class="icon" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
     </header>
     <div class="stage">
-      {#if entries.filter((e) => !e.is_dir).length > 1}
+      {#if fileCount > 1}
         <button class="nav left" onclick={() => step(-1)} aria-label="Previous"
           ><Icon name="prev" size={32} /></button
         >
@@ -115,31 +137,16 @@
         {/if}
       </div>
     </div>
-  </div>
+  </dialog>
 {/if}
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    background: rgba(8, 10, 14, 0.94);
-    color: #eee;
-    display: flex;
-    flex-direction: column;
-  }
   header {
     display: flex;
     align-items: center;
     gap: 0.6rem;
     padding: 0.5rem 0.75rem;
     background: rgba(0, 0, 0, 0.4);
-  }
-  header .icon,
-  header .btn {
-    color: #eee;
-    background: transparent;
-    border-color: rgba(255, 255, 255, 0.25);
   }
   .title {
     font-weight: 600;

@@ -1,61 +1,52 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity';
-  import { errorMessage, get, post } from '#lib/api.js';
-  import { filesHref, formatDate, formatSize, parentPath } from '#lib/format.js';
-  import type { TrashItem } from '#lib/types.js';
+  import { invalidate } from '$app/navigation';
+  import { errorMessage, post } from '#lib/api.js';
+  import { baseName, filesHref, formatDate, formatSize, parentPath } from '#lib/format.js';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Icon from '#lib/components/Icon.svelte';
-  import Modal from '#lib/components/Modal.svelte';
 
-  let items = $state<TrashItem[]>([]);
-  let retention = $state(0);
-  let loaded = $state(false);
-  let err = $state('');
+  let { data } = $props();
+
+  // Loaded by +page.ts; reloaded with invalidate('app:trash').
+  const items = $derived(data.items);
+  const retention = $derived(data.retention);
+  let actionErr = $state('');
+  const err = $derived(actionErr || data.loadError);
   let notice = $state('');
   let confirm = $state<null | 'selected' | 'all'>(null);
   const selected = new SvelteSet<string>();
 
-  async function load() {
-    try {
-      const r = await get<{ items: TrashItem[] | null; retention_days: number }>('/api/trash');
-      items = r.items ?? [];
-      retention = r.retention_days;
-      for (const id of selected) if (!items.some((i) => i.id === id)) selected.delete(id);
-    } catch (e) {
-      err = errorMessage(e);
-    } finally {
-      loaded = true;
-    }
+  async function reload() {
+    await invalidate('app:trash');
+    for (const id of selected) if (!items.some((i) => i.id === id)) selected.delete(id);
   }
 
-  $effect(() => {
-    load();
-  });
-
   async function restore(ids: string[]) {
-    err = notice = '';
+    actionErr = notice = '';
     try {
       const r = await post<{ paths: string[] | null }>('/api/trash/restore', { ids });
       const paths = r.paths ?? [];
       notice = paths.length === 1 ? `Restored to ${paths[0]}` : `Restored ${paths.length} items`;
       selected.clear();
     } catch (e) {
-      err = errorMessage(e);
+      actionErr = errorMessage(e);
     }
-    load();
+    reload();
   }
 
   async function purge() {
     const which = confirm;
     confirm = null;
-    err = notice = '';
+    actionErr = notice = '';
     try {
       if (which === 'all') await post('/api/trash/purge', { all: true });
       else await post('/api/trash/purge', { ids: [...selected] });
       selected.clear();
     } catch (e) {
-      err = errorMessage(e);
+      actionErr = errorMessage(e);
     }
-    load();
+    reload();
   }
 </script>
 
@@ -81,9 +72,7 @@
   {#if err}<div class="error">{err}</div>{/if}
   {#if notice}<div class="notice">{notice}</div>{/if}
 
-  {#if !loaded}
-    <p class="muted">Loading…</p>
-  {:else if !items.length}
+  {#if !items.length}
     <p class="muted">The trash is empty.</p>
   {:else}
     <div class="table-wrap">
@@ -122,9 +111,9 @@
               </td>
               <td>
                 <span class="row"
-                  ><Icon name={it.is_dir ? 'folder' : 'file'} size={18} />{it.original_path
-                    .split('/')
-                    .pop()}</span
+                  ><Icon name={it.is_dir ? 'folder' : 'file'} size={18} />{baseName(
+                    it.original_path
+                  )}</span
                 >
               </td>
               <td class="hide-mobile small"
@@ -144,16 +133,17 @@
 </div>
 
 {#if confirm}
-  <Modal title="Delete permanently?" onclose={() => (confirm = null)}>
+  <ConfirmDialog
+    title="Delete permanently?"
+    confirmLabel="Delete forever"
+    onconfirm={purge}
+    onclose={() => (confirm = null)}
+  >
     <p>
       {confirm === 'all' ? 'Everything in the trash' : `${selected.size} item(s)`} will be deleted permanently.
       This cannot be undone.
     </p>
-    {#snippet footer()}
-      <button onclick={() => (confirm = null)}>Cancel</button>
-      <button class="danger solid" onclick={purge}>Delete forever</button>
-    {/snippet}
-  </Modal>
+  </ConfirmDialog>
 {/if}
 
 <style>

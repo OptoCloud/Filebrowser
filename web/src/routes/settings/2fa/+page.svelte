@@ -1,8 +1,8 @@
 <script lang="ts">
   import QRCode from 'qrcode';
-  import { goto, invalidateAll } from '$app/navigation';
-  import { errorMessage, post } from '#lib/api.js';
-  import { session } from '#lib/session.svelte.js';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
+  import { errorMessage, logout, post } from '#lib/api.js';
 
   let secret = $state('');
   let otpURL = $state('');
@@ -11,7 +11,7 @@
   let err = $state('');
   let busy = $state(false);
 
-  const me = $derived(session.me);
+  const me = $derived(page.data.me);
 
   async function setup() {
     err = '';
@@ -34,24 +34,13 @@
     busy = true;
     try {
       await post('/api/auth/totp/enable', { code: code.replace(/\s/g, '') });
-      await invalidateAll();
-      goto('/settings?totp=1');
+      await goto('/settings?totp=1', { invalidateAll: true });
     } catch (x) {
       err = errorMessage(x);
       code = '';
     } finally {
       busy = false;
     }
-  }
-
-  async function logout() {
-    try {
-      await post('/api/auth/logout');
-    } catch {
-      /* ignore */
-    }
-    await invalidateAll();
-    goto('/login');
   }
 </script>
 
@@ -105,7 +94,7 @@
       </div>
     {/if}
     {#if me?.restricted}
-      <p class="small"><button class="ghost small" onclick={logout}>Log out</button></p>
+      <p class="small"><button class="ghost small" onclick={() => logout()}>Log out</button></p>
     {/if}
   {/if}
 </div>

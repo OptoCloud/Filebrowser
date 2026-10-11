@@ -1,10 +1,11 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { del, errorMessage, get, patch, post, put, qs } from '#lib/api.js';
   import { formatDate, formatSize } from '#lib/format.js';
-  import { session } from '#lib/session.svelte.js';
   import type { AdminUser, AuditEntry, Grant, Invite, Session } from '#lib/types.js';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import CopyField from '#lib/components/CopyField.svelte';
   import Modal from '#lib/components/Modal.svelte';
 
@@ -12,10 +13,8 @@
   let tab = $state<Tab>('users');
   let err = $state('');
   let notice = $state('');
-
-  $effect(() => {
-    if (session.me && session.me.user.role !== 'admin') goto('/files');
-  });
+  // Non-admins never get here (see +page.ts).
+  const myId = $derived(page.data.me?.user.id);
 
   // Users
   let users = $state<AdminUser[]>([]);
@@ -128,7 +127,7 @@
     } catch (x) {
       err = errorMessage(x);
     }
-    if (s.current) goto('/login');
+    if (s.current) goto('/login', { invalidateAll: true });
     else loadSessions();
   }
 
@@ -293,9 +292,8 @@
                 {#if u.totp_enabled}<button class="small" onclick={() => (confirmReset = u)}
                     >Reset 2FA</button
                   >{/if}
-                {#if u.id !== session.me?.user.id}<button
-                    class="small danger"
-                    onclick={() => (confirmDelete = u)}>Delete</button
+                {#if u.id !== myId}<button class="small danger" onclick={() => (confirmDelete = u)}
+                    >Delete</button
                   >{/if}
               </td>
             </tr>
@@ -550,26 +548,28 @@
 {/if}
 
 {#if confirmDelete}
-  <Modal title="Delete user?" onclose={() => (confirmDelete = null)}>
+  <ConfirmDialog
+    title="Delete user?"
+    confirmLabel="Delete"
+    onconfirm={deleteUser}
+    onclose={() => (confirmDelete = null)}
+  >
     <p>
       Delete <strong>{confirmDelete.username}</strong>? Their sessions, shares and trash are
       removed. Files stay on disk.
     </p>
-    {#snippet footer()}
-      <button onclick={() => (confirmDelete = null)}>Cancel</button>
-      <button class="danger solid" onclick={deleteUser}>Delete</button>
-    {/snippet}
-  </Modal>
+  </ConfirmDialog>
 {/if}
 
 {#if confirmReset}
-  <Modal title="Reset two-factor?" onclose={() => (confirmReset = null)}>
+  <ConfirmDialog
+    title="Reset two-factor?"
+    confirmLabel="Reset"
+    onconfirm={resetTOTP}
+    onclose={() => (confirmReset = null)}
+  >
     <p>{confirmReset.username} will be logged out and must set up an authenticator again.</p>
-    {#snippet footer()}
-      <button onclick={() => (confirmReset = null)}>Cancel</button>
-      <button class="danger solid" onclick={resetTOTP}>Reset</button>
-    {/snippet}
-  </Modal>
+  </ConfirmDialog>
 {/if}
 
 <style>

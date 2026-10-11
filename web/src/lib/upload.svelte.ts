@@ -10,6 +10,8 @@ export interface UploadItem {
   id: number;
   name: string;
   relativePath: string;
+  /** Destination folder the upload was started in. */
+  dir: string;
   size: number;
   sent: number;
   status: 'queued' | 'uploading' | 'done' | 'error' | 'cancelled';
@@ -45,24 +47,33 @@ export class Uploader {
   // Internal bookkeeping of in-flight tus uploads; never read by the UI, so no reactivity needed.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private uploads = new Map<number, tus.Upload>();
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private finishers = new Map<number, () => void>();
   private queue: { item: UploadItem; file: File; dir: string }[] = [];
   private active = 0;
   private endpoint: string;
   private headers: Record<string, string>;
-  private onFileDone?: (item: UploadItem) => void;
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private doneListeners = new Set<(item: UploadItem) => void>();
 
-  constructor(
-    endpoint: string,
-    headers: Record<string, string> = {},
-    onFileDone?: (item: UploadItem) => void
-  ) {
+  constructor(endpoint: string, headers: Record<string, string> = {}) {
     this.endpoint = endpoint;
     this.headers = headers;
-    this.onFileDone = onFileDone;
   }
 
   get busy(): boolean {
     return this.items.some((i) => i.status === 'queued' || i.status === 'uploading');
+  }
+
+  /** Number of tus uploads currently started and not yet finished. */
+  get running(): number {
+    return this.active;
+  }
+
+  /** Calls fn whenever a file finishes uploading; returns an unsubscribe function. */
+  onFileDone(fn: (item: UploadItem) => void): () => void {
+    this.doneListeners.add(fn);
+    return () => this.doneListeners.delete(fn);
   }
 
   add(files: PickedFile[], dir: string) {
@@ -71,6 +82,7 @@ export class Uploader {
         id: nextId++,
         name: f.file.name,
         relativePath: f.relativePath || f.file.name,
+        dir,
         size: f.file.size,
         sent: 0,
         status: 'queued',
@@ -92,17 +104,35 @@ export class Uploader {
   private start(item: UploadItem, file: File, dir: string) {
     this.active++;
     item.status = 'uploading';
+    // Runs exactly once per started upload, whether it succeeds, fails or is cancelled.
+    let finished = false;
     const finish = () => {
+      if (finished) return;
+      finished = true;
       this.active--;
       this.uploads.delete(item.id);
+      this.finishers.delete(item.id);
       this.pump();
     };
+    this.finishers.set(item.id, finish);
     const upload = new tus.Upload(file, {
       endpoint: this.endpoint,
       chunkSize: CHUNK,
       retryDelays: [0, 2000, 5000, 10000],
       headers: this.headers,
       removeFingerprintOnSuccess: true,
+      // The default fingerprint ignores the destination, so identical files in
+      // different folders (or shares) would resume each other's uploads.
+      fingerprint: async (f) =>
+        [
+          'fb',
+          this.endpoint,
+          this.headers['X-Share-Token'] ?? '',
+          dir,
+          item.relativePath,
+          f.size,
+          f.lastModified,
+        ].join('|'),
       metadata: {
         filename: file.name,
         dir,
@@ -116,14 +146,16 @@ export class Uploader {
         const name = res.getHeader('X-Fb-Name') || res.getHeader('X-Fb-Path');
         if (name) item.storedName = name.split('/').pop();
       },
+      // Late or duplicate callbacks (after cancel, or after the other outcome) are ignored.
       onSuccess: () => {
+        if (finished) return;
         item.status = 'done';
         item.sent = item.size;
         finish();
-        this.onFileDone?.(item);
+        for (const fn of this.doneListeners) fn(item);
       },
       onError: (err) => {
-        if (item.status === 'cancelled') return;
+        if (finished) return;
         item.status = 'error';
         item.error = tusError(err);
         finish();
@@ -133,10 +165,14 @@ export class Uploader {
     upload
       .findPreviousUploads()
       .then((prev) => {
+        // Cancelled while looking for a previous upload: never start.
+        if (item.status === 'cancelled') return;
         if (prev.length) upload.resumeFromPreviousUpload(prev[0]);
         upload.start();
       })
-      .catch(() => upload.start());
+      .catch(() => {
+        if (item.status !== 'cancelled') upload.start();
+      });
   }
 
   cancel(id: number) {
@@ -150,8 +186,8 @@ export class Uploader {
       this.uploads.delete(id);
     }
     if (wasActive) {
-      this.active--;
-      this.pump();
+      // Mark the upload finished so a late callback cannot decrement again.
+      this.finishers.get(id)?.();
     }
   }
 
@@ -163,6 +199,12 @@ export class Uploader {
     this.items = this.items.filter((i) => i.status === 'queued' || i.status === 'uploading');
   }
 }
+
+/**
+ * The uploader for the app origin. It lives for the whole page session, so
+ * uploads keep running (and stay visible) when the user leaves the folder.
+ */
+export const appUploader = new Uploader('/api/uploads/');
 
 /** Collects files (recursively for folders) from a drop event. */
 export async function filesFromDrop(dt: DataTransfer): Promise<PickedFile[]> {

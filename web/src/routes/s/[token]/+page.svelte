@@ -1,16 +1,21 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { SvelteSet } from 'svelte/reactivity';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { ApiError, errorMessage, get, post, qs } from '#lib/api.js';
-  import { formatDate, formatSize, isViewableImage, kindOf, thumbable } from '#lib/format.js';
+  import { modal } from '#lib/dialog.js';
+  import { formatDate, formatSize, isViewableImage, kindOf, pathCrumbs } from '#lib/format.js';
+  import { LatestRequest } from '#lib/latest.js';
   import type { Entry, ShareInfo } from '#lib/types.js';
   import { Uploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
+  import EntryIcon from '#lib/components/EntryIcon.svelte';
+  import EntryThumb from '#lib/components/EntryThumb.svelte';
   import Icon from '#lib/components/Icon.svelte';
+  import UploadList from '#lib/components/UploadList.svelte';
 
-  const token = $derived(page.params.token ?? '');
-  const base = $derived('/s/' + encodeURIComponent(token));
+  // The layout re-creates this page when the token changes, so it is fixed per instance.
+  const token = page.params.token ?? '';
+  const base = '/s/' + encodeURIComponent(token);
   const sub = $derived(page.url.searchParams.get('path') ?? '');
 
   let info = $state<ShareInfo | null>(null);
@@ -21,8 +26,9 @@
 
   let entries = $state<Entry[]>([]);
   let listErr = $state('');
+  let listLoading = $state(false);
+  const listReq = new LatestRequest();
   let preview = $state<Entry | null>(null);
-  const failedThumbs = new SvelteSet<string>();
 
   // Inline previews count against a download limit, so do not load them unasked.
   let showPreview = $state(false);
@@ -46,21 +52,31 @@
   }
 
   async function loadList(p: string) {
+    const signal = listReq.next();
     listErr = '';
+    listLoading = true;
     try {
       const r = await get<{ path: string; entries: Entry[] | null }>(
-        base + '/api/list' + qs({ path: p })
+        base + '/api/list' + qs({ path: p }),
+        { signal }
       );
+      if (signal.aborted) return;
       entries = r.entries ?? [];
     } catch (e) {
+      if (signal.aborted) return;
       listErr = errorMessage(e);
       entries = [];
     }
+    listLoading = false;
   }
 
   $effect(() => {
-    void token;
     untrack(loadInfo);
+    // Leaving the share stops its uploads; they could not be shown anywhere else.
+    return () => {
+      listReq.abort();
+      uploader?.cancelAll();
+    };
   });
 
   const unlocked = $derived(!!info && (!info.needs_password || info.unlocked));
@@ -93,7 +109,7 @@
     return base + '/file' + qs({ path: p || undefined, inline });
   }
 
-  const crumbs = $derived(sub ? sub.split('/') : []);
+  const crumbs = $derived(pathCrumbs(sub));
 
   function pick() {
     if (!fileInput || !uploader) return;
@@ -109,13 +125,29 @@
     if (files.length) uploader.add(files, '');
   }
 
-  function iconFor(e: { is_dir: boolean; mime?: string }): string {
-    const k = kindOf(e);
-    return k === 'dir' ? 'folder' : k === 'file' ? 'file' : k;
+  // Closing the tab would abort running uploads.
+  function onbeforeunload(e: BeforeUnloadEvent) {
+    if (uploader?.busy) e.preventDefault();
   }
 </script>
 
 <svelte:head><title>{info?.name || 'Shared files'}</title></svelte:head>
+
+<svelte:window {onbeforeunload} />
+
+{#snippet media(p: string, name: string, mime: string | undefined, autoplay: boolean)}
+  {@const k = kindOf({ is_dir: false, mime })}
+  {#if k === 'image' && isViewableImage(mime)}
+    <img src={fileURL(p, true)} alt={name} />
+  {:else if k === 'video'}
+    <!-- svelte-ignore a11y_media_has_caption -->
+    <video controls {autoplay} playsinline preload="metadata" src={fileURL(p, true)}></video>
+  {:else if k === 'audio'}
+    <audio controls {autoplay} preload="metadata" src={fileURL(p, true)}></audio>
+  {:else if k === 'pdf'}
+    <iframe src={fileURL(p, true)} title={name}></iframe>
+  {/if}
+{/snippet}
 
 <div class="share">
   {#if fatal}
@@ -167,42 +199,13 @@
       <p class="muted small">Link expires {formatDate(info.expires_at)}</p>
     </div>
     {#if uploader && uploader.items.length}
-      <div class="card">
-        <ul class="ups">
-          {#each uploader.items as it (it.id)}
-            <li>
-              <div class="row">
-                <span class="nm">{it.relativePath}</span>
-                <span class="spacer"></span>
-                <span class="small muted">
-                  {#if it.status === 'done'}✓ uploaded{it.storedName && it.storedName !== it.name
-                      ? ` as ${it.storedName}`
-                      : ''}
-                  {:else if it.status === 'uploading'}{Math.floor(
-                      (it.sent / Math.max(it.size, 1)) * 100
-                    )}%
-                  {:else}{it.status}{/if}
-                </span>
-                {#if it.status === 'uploading' || it.status === 'queued'}
-                  <button class="icon" aria-label="Cancel" onclick={() => uploader?.cancel(it.id)}
-                    ><Icon name="close" size={16} /></button
-                  >
-                {/if}
-              </div>
-              {#if it.status === 'uploading'}<div class="progress">
-                  <div style="width:{(it.sent / Math.max(it.size, 1)) * 100}%"></div>
-                </div>{/if}
-              {#if it.error}<div class="small err">{it.error}</div>{/if}
-            </li>
-          {/each}
-        </ul>
-      </div>
+      <div class="card"><UploadList {uploader} /></div>
     {/if}
   {:else if !info.is_dir}
     {@const k = kindOf({ is_dir: false, mime: info.mime })}
     <div class="card file">
       <div class="row">
-        <Icon name={iconFor({ is_dir: false, mime: info.mime })} size={28} />
+        <EntryIcon entry={{ is_dir: false, mime: info.mime }} size={28} />
         <div>
           <h1 class="fname">{info.name}</h1>
           <span class="muted small"
@@ -220,15 +223,8 @@
         {#if info.downloads_left !== undefined && !showPreview && (k === 'image' || k === 'video' || k === 'audio' || k === 'pdf')}
           <p class="center"><button onclick={() => (showPreview = true)}>Show preview</button></p>
           <p class="center muted small">Previewing uses one of the remaining downloads.</p>
-        {:else if k === 'image' && isViewableImage(info.mime)}
-          <img src={fileURL('', true)} alt={info.name} />
-        {:else if k === 'video'}
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video controls playsinline preload="metadata" src={fileURL('', true)}></video>
-        {:else if k === 'audio'}
-          <audio controls preload="metadata" src={fileURL('', true)}></audio>
-        {:else if k === 'pdf'}
-          <iframe src={fileURL('', true)} title={info.name}></iframe>
+        {:else}
+          {@render media('', info.name, info.mime, false)}
         {/if}
       </div>
     </div>
@@ -238,11 +234,9 @@
         <button class="ghost small" onclick={() => openDir('')}
           ><Icon name="folder" size={18} />{info.name}</button
         >
-        {#each crumbs as c, i (i)}
+        {#each crumbs as c (c.path)}
           <span class="muted">/</span>
-          <button class="ghost small" onclick={() => openDir(crumbs.slice(0, i + 1).join('/'))}
-            >{c}</button
-          >
+          <button class="ghost small" onclick={() => openDir(c.path)}>{c.name}</button>
         {/each}
       </nav>
       <span class="spacer"></span>
@@ -268,24 +262,14 @@
             onclick={() => (e.is_dir ? openDir(e.path) : (preview = e))}
             title={e.name}
           >
-            <div class="thumb">
-              {#if thumbable(e) && !failedThumbs.has(e.path)}
-                <img
-                  loading="lazy"
-                  alt=""
-                  src={base + '/thumb' + qs({ path: e.path })}
-                  onerror={() => failedThumbs.add(e.path)}
-                />
-              {:else}
-                <span class="ic" class:dir={e.is_dir}><Icon name={iconFor(e)} size={44} /></span>
-              {/if}
-            </div>
+            <EntryThumb entry={e} src={base + '/thumb' + qs({ path: e.path })} size={44} />
             <div class="tname">{e.name}</div>
             <div class="tsize muted small">{e.is_dir ? '' : formatSize(e.size)}</div>
           </button>
         </div>
       {:else}
-        {#if !listErr}<p class="muted">This folder is empty.</p>{/if}
+        {#if listLoading}<p class="muted">Loading…</p>
+        {:else if !listErr}<p class="muted">This folder is empty.</p>{/if}
       {/each}
     </div>
   {/if}
@@ -293,7 +277,7 @@
 
 {#if preview}
   {@const k = kindOf(preview)}
-  <div class="overlay" role="dialog" aria-modal="true" aria-label={preview.name}>
+  <dialog class="viewer" aria-label={preview.name} {@attach modal(() => (preview = null))}>
     <header class="row">
       <strong class="oname">{preview.name}</strong>
       <span class="spacer"></span>
@@ -305,15 +289,8 @@
       >
     </header>
     <div class="ostage">
-      {#if k === 'image' && isViewableImage(preview.mime)}
-        <img src={fileURL(preview.path, true)} alt={preview.name} />
-      {:else if k === 'video'}
-        <!-- svelte-ignore a11y_media_has_caption -->
-        <video controls autoplay playsinline src={fileURL(preview.path, true)}></video>
-      {:else if k === 'audio'}
-        <audio controls autoplay src={fileURL(preview.path, true)}></audio>
-      {:else if k === 'pdf'}
-        <iframe src={fileURL(preview.path, true)} title={preview.name}></iframe>
+      {#if (k === 'image' && isViewableImage(preview.mime)) || k === 'video' || k === 'audio' || k === 'pdf'}
+        {@render media(preview.path, preview.name, preview.mime, true)}
       {:else}
         <div class="center">
           <p>No preview available.</p>
@@ -323,10 +300,8 @@
         </div>
       {/if}
     </div>
-  </div>
+  </dialog>
 {/if}
-
-<svelte:window onkeydown={(e) => e.key === 'Escape' && (preview = null)} />
 
 <style>
   .share {
@@ -358,24 +333,6 @@
   .drop.over {
     border-color: var(--accent);
     background: var(--accent-soft);
-  }
-  .ups {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .ups li {
-    padding: 0.4rem 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .ups li:last-child {
-    border-bottom: none;
-  }
-  .nm {
-    word-break: break-all;
-  }
-  .err {
-    color: var(--danger);
   }
   .fname {
     font-size: 1.15rem;
@@ -435,26 +392,6 @@
     white-space: normal;
     text-align: left;
   }
-  .thumb {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--surface-2);
-    overflow: hidden;
-  }
-  .thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .ic {
-    color: var(--muted);
-    display: inline-flex;
-  }
-  .ic.dir {
-    color: #e0a526;
-  }
   .tname {
     padding: 0.4rem 0.5rem 0;
     font-size: 0.85rem;
@@ -465,24 +402,9 @@
   .tsize {
     padding: 0 0.5rem 0.4rem;
   }
-  .overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    background: rgba(8, 10, 14, 0.94);
-    color: #eee;
-    display: flex;
-    flex-direction: column;
-  }
-  .overlay header {
+  .viewer header {
     padding: 0.5rem 0.75rem;
     flex-wrap: nowrap;
-  }
-  .overlay header .btn,
-  .overlay header .icon {
-    color: #eee;
-    background: transparent;
-    border-color: rgba(255, 255, 255, 0.25);
   }
   .oname {
     overflow: hidden;

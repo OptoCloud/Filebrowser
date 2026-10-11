@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Uploader } from '#lib/upload.svelte.js';
-  import { formatSize } from '#lib/format.js';
   import Icon from './Icon.svelte';
+  import UploadList from './UploadList.svelte';
 
   let { uploader }: { uploader: Uploader } = $props();
   let collapsed = $state(false);
@@ -25,33 +25,7 @@
       </button>
     </header>
     {#if !collapsed}
-      <ul>
-        {#each uploader.items as it (it.id)}
-          <li>
-            <div class="line">
-              <span class="name" title={it.relativePath}>{it.relativePath}</span>
-              <span class="muted small">
-                {#if it.status === 'uploading'}{Math.floor((it.sent / Math.max(it.size, 1)) * 100)}%
-                {:else if it.status === 'done'}✓ {formatSize(it.size)}
-                {:else if it.status === 'queued'}queued
-                {:else if it.status === 'cancelled'}cancelled
-                {/if}
-              </span>
-              {#if it.status === 'uploading' || it.status === 'queued'}
-                <button class="icon" onclick={() => uploader.cancel(it.id)} aria-label="Cancel">
-                  <Icon name="close" size={16} />
-                </button>
-              {/if}
-            </div>
-            {#if it.status === 'uploading'}
-              <div class="progress">
-                <div style="width:{(it.sent / Math.max(it.size, 1)) * 100}%"></div>
-              </div>
-            {/if}
-            {#if it.status === 'error'}<div class="err small">{it.error}</div>{/if}
-          </li>
-        {/each}
-      </ul>
+      <div class="list"><UploadList {uploader} /></div>
     {/if}
   </div>
 {/if}
@@ -75,33 +49,9 @@
     padding: 0.5rem 0.75rem;
     border-bottom: 1px solid var(--border);
   }
-  ul {
-    list-style: none;
-    margin: 0;
+  .list {
     padding: 0.25rem 0.75rem;
     max-height: 40vh;
     overflow-y: auto;
-  }
-  li {
-    padding: 0.35rem 0;
-    border-bottom: 1px solid var(--border);
-  }
-  li:last-child {
-    border-bottom: none;
-  }
-  .line {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.9rem;
-  }
-  .err {
-    color: var(--danger);
   }
 </style>
