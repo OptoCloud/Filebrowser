@@ -206,9 +206,10 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*httpx.Id
 	return &httpx.Identity{User: user, Session: sess, Access: access}, true
 }
 
-// requiresTOTP: admins and anyone who can upload or create shares.
+// requiresTOTP: a second factor is required for admins, and for anyone who
+// can upload or create shares unless an admin exempted them.
 func requiresTOTP(id *httpx.Identity) bool {
-	return id.User.IsAdmin() || id.Access.CanWrite()
+	return id.User.IsAdmin() || id.Access.CanWrite() && !id.User.MFAExempt
 }
 
 // isRestricted reports a session that may only enroll TOTP: the user needs

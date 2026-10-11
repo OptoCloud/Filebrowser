@@ -323,3 +323,48 @@ func TestJSONRejectsNUL(t *testing.T) {
 	expect(t, a.do("POST", "/api/trash/restore", json.RawMessage(`{"ids":["a\u0000b"]}`)), 400)
 	expect(t, h.app().do("POST", "/api/auth/login", json.RawMessage(`{"username":"ivy\u0000","password":"x"}`)), 400)
 }
+
+// Admins can exempt selected non-admin users from the two-factor requirement.
+func TestMFAExemption(t *testing.T) {
+	h := newHarness(t)
+	h.user("root", "admin")
+	admin := h.login("root")
+	u := h.user("lou", "user", store.Grant{Path: "lou", Permission: "write"})
+	write(t, h.root, "lou/a.txt", "a")
+	restricted := func(c *client) any { return decode[map[string]any](t, c.do("GET", "/api/me", nil))["restricted"] }
+
+	c := h.app()
+	expect(t, c.do("POST", "/api/auth/login", map[string]string{"username": "lou", "password": testPassword}), 200)
+	if restricted(c) != true {
+		t.Fatal("a writer without a second factor should be restricted")
+	}
+	id := strconv.FormatInt(u.ID, 10)
+	expect(t, admin.do("PATCH", "/api/admin/users/"+id, map[string]any{"mfa_exempt": true}), 200)
+	if restricted(c) != false {
+		t.Fatal("exemption did not lift the restriction")
+	}
+	expect(t, c.do("GET", "/api/files?path=lou", nil), 200)
+	expect(t, admin.do("PATCH", "/api/admin/users/"+id, map[string]any{"mfa_exempt": false}), 200)
+	if restricted(c) != true {
+		t.Fatal("removing the exemption did not restore the requirement")
+	}
+
+	// Admins cannot be exempted, and promoting an exempt user ends the exemption.
+	expect(t, admin.do("PATCH", "/api/admin/users/"+id, map[string]any{"mfa_exempt": true, "role": "admin"}), 400)
+	expect(t, admin.do("PATCH", "/api/admin/users/"+id, map[string]any{"mfa_exempt": true}), 200)
+	expect(t, admin.do("PATCH", "/api/admin/users/"+id, map[string]any{"role": "admin"}), 200)
+	if got, _ := h.store.UserByID(context.Background(), u.ID); got.MFAExempt {
+		t.Fatal("promotion to admin kept the exemption")
+	}
+	expect(t, admin.do("POST", "/api/admin/invites", map[string]any{"role": "admin", "mfa_exempt": true}), 400)
+
+	// An invite can carry the exemption to the account it creates.
+	inv := decode[map[string]any](t, admin.do("POST", "/api/admin/invites",
+		map[string]any{"role": "user", "grant_path": "shared", "grant_perm": "write", "mfa_exempt": true}))
+	token := inv["url"].(string)[strings.LastIndex(inv["url"].(string), "/")+1:]
+	n := h.app()
+	expect(t, n.do("POST", "/api/auth/invite/accept", map[string]string{"token": token, "username": "newbie", "password": testPassword}), 200)
+	if restricted(n) != false {
+		t.Fatal("exempt invite still requires a second factor")
+	}
+}

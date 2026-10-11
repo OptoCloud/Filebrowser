@@ -22,14 +22,15 @@ type Invite struct {
 	ExpiresAt time.Time  `json:"expires_at"`
 	UsedAt    *time.Time `json:"used_at"`
 	UsedBy    *int64     `json:"used_by"`
+	MFAExempt bool       `json:"mfa_exempt"`
 }
 
-const inviteCols = `id, token_hash, role, grant_path, grant_perm, created_by, created_at, expires_at, used_at, used_by`
+const inviteCols = `id, token_hash, role, grant_path, grant_perm, created_by, created_at, expires_at, used_at, used_by, mfa_exempt`
 
 func (s *Store) CreateInvite(ctx context.Context, inv *Invite) error {
-	return s.pool.QueryRow(ctx, `INSERT INTO invites (token_hash, role, grant_path, grant_perm, created_by, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, created_at`,
-		inv.TokenHash, inv.Role, inv.GrantPath, inv.GrantPerm, inv.CreatedBy, inv.ExpiresAt).Scan(&inv.ID, &inv.CreatedAt)
+	return s.pool.QueryRow(ctx, `INSERT INTO invites (token_hash, role, grant_path, grant_perm, created_by, expires_at, mfa_exempt)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, created_at`,
+		inv.TokenHash, inv.Role, inv.GrantPath, inv.GrantPerm, inv.CreatedBy, inv.ExpiresAt, inv.MFAExempt).Scan(&inv.ID, &inv.CreatedAt)
 }
 
 func (s *Store) InviteByTokenHash(ctx context.Context, hash []byte) (*Invite, error) {
@@ -49,15 +50,15 @@ func (s *Store) AcceptInvite(ctx context.Context, inviteID int64, username, pass
 	var user *User
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var inv Invite
-		err := tx.QueryRow(ctx, `SELECT role, grant_path, grant_perm FROM invites
+		err := tx.QueryRow(ctx, `SELECT role, grant_path, grant_perm, mfa_exempt FROM invites
 			WHERE id = $1 AND used_at IS NULL AND expires_at > $2 FOR UPDATE`, inviteID, now).
-			Scan(&inv.Role, &inv.GrantPath, &inv.GrantPerm)
+			Scan(&inv.Role, &inv.GrantPath, &inv.GrantPerm, &inv.MFAExempt)
 		if err != nil {
 			return notFound(err)
 		}
 		user, err = scanUser(tx.QueryRow(ctx,
-			`INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING `+userCols,
-			username, passwordHash, inv.Role))
+			`INSERT INTO users (username, password_hash, role, mfa_exempt) VALUES ($1, $2, $3, $4) RETURNING `+userCols,
+			username, passwordHash, inv.Role, inv.MFAExempt && inv.Role != "admin"))
 		if isUniqueViolation(err) {
 			return ErrConflict
 		} else if err != nil {

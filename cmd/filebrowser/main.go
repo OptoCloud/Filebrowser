@@ -39,12 +39,14 @@ commands:
   service install|uninstall             register as a Windows service
   migrate                               apply database migrations
   config-example                        print an example configuration
-  user add <name> [-admin] [-grant path:read|write]... [-password-stdin]
+  user add <name> [-admin] [-grant path:read|write]... [-mfa-exempt] [-password-stdin]
   user list
   user reset-password <name> [-password-stdin]
   user reset-totp <name>                remove TOTP and all security keys
   user grant <name> <path> read|write|none
   user disable|enable <name>
+  user mfa <name> required|exempt       require two-factor login, or exempt a
+                                        non-admin user from it
 
 The config path defaults to $FB_CONFIG or ./filebrowser.toml.
 `
@@ -265,6 +267,9 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 			if u.TOTPEnabled() {
 				flags += " totp"
 			}
+			if u.MFAExempt {
+				flags += " mfa-exempt"
+			}
 			fmt.Printf("%-20s %-6s%s grants=%v\n", u.Username, u.Role, flags, g)
 		}
 		return nil
@@ -273,11 +278,15 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		fs := flag.NewFlagSet("user add", flag.ExitOnError)
 		admin := fs.Bool("admin", false, "make the user an admin")
 		stdin := fs.Bool("password-stdin", false, "read the password from stdin")
+		exempt := fs.Bool("mfa-exempt", false, "do not require two-factor authentication (not for admins)")
 		var grants multiFlag
 		fs.Var(&grants, "grant", "grant path:read|write (repeatable)")
 		name, err := positional(fs, rest)
 		if err != nil {
 			return err
+		}
+		if *exempt && *admin {
+			return errors.New("admins always need two-factor authentication; -mfa-exempt is for other users")
 		}
 		if !server.ValidUsername(name) {
 			return errors.New("invalid username")
@@ -317,9 +326,14 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		if err := st.SetGrants(ctx, u.ID, gs); err != nil {
 			return err
 		}
-		logCLI("user add", name, map[string]any{"role": role, "grants": gs})
+		if *exempt {
+			if err := st.UpdateUser(ctx, u.ID, store.UserUpdate{MFAExempt: exempt}); err != nil {
+				return err
+			}
+		}
+		logCLI("user add", name, map[string]any{"role": role, "grants": gs, "mfa_exempt": *exempt})
 		fmt.Printf("created %s (%s)\n", name, role)
-		if role == "admin" || slices.ContainsFunc(gs, func(g store.Grant) bool { return g.Permission == "write" }) {
+		if role == "admin" || !*exempt && slices.ContainsFunc(gs, func(g store.Grant) bool { return g.Permission == "write" }) {
 			fmt.Println("note: two-factor authentication will be required at first login")
 		}
 		return nil
@@ -405,6 +419,25 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		}
 		logCLI("user grant", rest[0], map[string]any{"path": p, "permission": rest[2]})
 		fmt.Printf("grants for %s: %v\n", rest[0], out)
+		return nil
+
+	case "mfa":
+		if len(rest) != 2 || (rest[1] != "required" && rest[1] != "exempt") {
+			return errors.New("usage: user mfa <name> required|exempt")
+		}
+		u, err := st.UserByName(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		exempt := rest[1] == "exempt"
+		if exempt && u.IsAdmin() {
+			return errors.New("admins always need two-factor authentication")
+		}
+		if err := st.UpdateUser(ctx, u.ID, store.UserUpdate{MFAExempt: &exempt}); err != nil {
+			return err
+		}
+		logCLI("user mfa", rest[0], map[string]any{"mfa_exempt": exempt})
+		fmt.Printf("two-factor authentication for %s: %s\n", rest[0], rest[1])
 		return nil
 
 	case "disable", "enable":

@@ -19,10 +19,10 @@
   // Users
   let users = $state<AdminUser[]>([]);
   let createOpen = $state(false);
-  let nu = $state({ username: '', password: '', role: 'user', quotaGB: 0 });
+  let nu = $state({ username: '', password: '', role: 'user', quotaGB: 0, mfaExempt: false });
   let nuGrants = $state<Grant[]>([]);
   let editing = $state<AdminUser | null>(null);
-  let ed = $state({ role: 'user', quotaGB: 0, disabled: false });
+  let ed = $state({ role: 'user', quotaGB: 0, disabled: false, mfaExempt: false });
   let edGrants = $state<Grant[]>([]);
   let confirmDelete = $state<AdminUser | null>(null);
   let confirmReset = $state<AdminUser | null>(null);
@@ -48,10 +48,11 @@
         role: nu.role,
         quota_bytes: Math.round((nu.quotaGB || 0) * GB),
         grants: nu.role === 'admin' ? [] : nuGrants,
+        mfa_exempt: nu.role !== 'admin' && nu.mfaExempt,
       });
       createOpen = false;
       notice = `User ${nu.username} created.`;
-      nu = { username: '', password: '', role: 'user', quotaGB: 0 };
+      nu = { username: '', password: '', role: 'user', quotaGB: 0, mfaExempt: false };
       nuGrants = [];
       loadUsers();
     } catch (x) {
@@ -62,7 +63,12 @@
   function startEdit(u: AdminUser) {
     modalErr = '';
     editing = u;
-    ed = { role: u.role, quotaGB: u.quota_bytes / GB, disabled: u.disabled };
+    ed = {
+      role: u.role,
+      quotaGB: u.quota_bytes / GB,
+      disabled: u.disabled,
+      mfaExempt: u.mfa_exempt,
+    };
     edGrants = (u.grants ?? []).map((g) => ({ ...g }));
   }
 
@@ -76,6 +82,7 @@
         role: ed.role,
         quota_bytes: Math.round((ed.quotaGB || 0) * GB),
         disabled: ed.disabled,
+        mfa_exempt: ed.role !== 'admin' && ed.mfaExempt,
       });
       await put('/api/admin/users/' + u.id + '/grants', edGrants);
       editing = null;
@@ -134,7 +141,14 @@
   // Invites
   let invites = $state<Invite[]>([]);
   let inviteOpen = $state(false);
-  let inv = $state({ role: 'user', grantPath: '', grantPerm: 'read', withGrant: false, days: 7 });
+  let inv = $state({
+    role: 'user',
+    grantPath: '',
+    grantPerm: 'read',
+    withGrant: false,
+    days: 7,
+    mfaExempt: false,
+  });
   let inviteURL = $state('');
   async function loadInvites() {
     try {
@@ -152,6 +166,7 @@
         grant_path: inv.withGrant ? inv.grantPath : undefined,
         grant_perm: inv.withGrant ? inv.grantPerm : undefined,
         expires_in: inv.days * 86400,
+        mfa_exempt: inv.role !== 'admin' && inv.mfaExempt,
       });
       inviteURL = r.url;
       loadInvites();
@@ -206,6 +221,13 @@
 </script>
 
 <svelte:head><title>Admin</title></svelte:head>
+
+{#snippet exemptToggle(o: { mfaExempt: boolean })}
+  <label class="inline"
+    ><input type="checkbox" bind:checked={o.mfaExempt} /> Do not require two-factor authentication (even
+    with write access)</label
+  >
+{/snippet}
 
 {#snippet grantEditor(grants: Grant[])}
   <div class="grants">
@@ -288,6 +310,10 @@
                 {#if u.webauthn_count}<span class="badge ok"
                     >{u.webauthn_count}
                     {u.webauthn_count === 1 ? 'key' : 'keys'}</span
+                  >{/if}
+                {#if u.mfa_exempt}<span
+                    class="badge"
+                    title="Two-factor authentication is not required">not required</span
                   >{/if}</td
               >
               <td class="hide-mobile small">{u.quota_bytes ? formatSize(u.quota_bytes) : '∞'}</td>
@@ -361,7 +387,12 @@
               <td class="small">{formatDate(i.created_at)}</td>
               <td>{i.role}</td>
               <td class="small"
-                >{i.grant_path !== null ? `/${i.grant_path} (${i.grant_perm})` : 'none'}</td
+                >{i.grant_path !== null
+                  ? `/${i.grant_path} (${i.grant_perm})`
+                  : 'none'}{#if i.mfa_exempt}<span
+                    class="badge"
+                    title="Two-factor authentication will not be required">no 2FA</span
+                  >{/if}</td
               >
               <td class="small">{formatDate(i.expires_at)}</td>
               <td>
@@ -453,9 +484,12 @@
         <p class="small muted">Folder access (paths relative to the files root):</p>
         {@render grantEditor(nuGrants)}
       {/if}
+      {#if nu.role !== 'admin'}
+        {@render exemptToggle(nu)}
+      {/if}
       <p class="small muted">
-        Users with write access or admin rights must set up two-factor authentication at first
-        login.
+        Admins, and users with write access unless exempted, must set up two-factor authentication
+        at first login.
       </p>
       {#if modalErr}<div class="error">{modalErr}</div>{/if}
     </form>
@@ -488,6 +522,9 @@
       <label class="inline"
         ><input type="checkbox" bind:checked={ed.disabled} /> Disabled (cannot log in, shares stop working)</label
       >
+      {#if ed.role !== 'admin'}
+        {@render exemptToggle(ed)}
+      {/if}
       <p class="small muted">
         Folder access{ed.role === 'admin' ? ' (admins can access everything regardless)' : ''}:
       </p>
@@ -518,6 +555,9 @@
         <label class="inline"
           ><input type="checkbox" bind:checked={inv.withGrant} /> Grant folder access</label
         >
+        {#if inv.role !== 'admin'}
+          {@render exemptToggle(inv)}
+        {/if}
         {#if inv.withGrant}
           <div class="row grantrow">
             <input

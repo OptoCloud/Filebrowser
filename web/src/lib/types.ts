@@ -12,6 +12,8 @@ export interface User {
   quota_bytes: number;
   created_at: string;
   disabled: boolean;
+  /** An admin lifted the two-factor requirement (never for admins). */
+  mfa_exempt: boolean;
 }
 
 export interface Provider {
@@ -124,6 +126,7 @@ export interface Invite {
   expires_at: string;
   used_at: string | null;
   used_by: number | null;
+  mfa_exempt: boolean;
 }
 
 export interface AuditEntry {

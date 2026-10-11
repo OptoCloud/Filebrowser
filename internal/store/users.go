@@ -19,6 +19,8 @@ type User struct {
 	TOTPLastStep int64     `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
 	Disabled     bool      `json:"disabled"`
+	// MFAExempt lifts the two-factor requirement for a non-admin writer.
+	MFAExempt bool `json:"mfa_exempt"`
 }
 
 func (u *User) IsAdmin() bool     { return u.Role == "admin" }
@@ -29,12 +31,12 @@ type Grant struct {
 	Permission string `json:"permission"` // read or write
 }
 
-const userCols = `id, username, password_hash, role, quota_bytes, totp_secret, totp_pending, totp_last_step, created_at, disabled`
+const userCols = `id, username, password_hash, role, quota_bytes, totp_secret, totp_pending, totp_last_step, created_at, disabled, mfa_exempt`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.QuotaBytes,
-		&u.TOTPSecret, &u.TOTPPending, &u.TOTPLastStep, &u.CreatedAt, &u.Disabled)
+		&u.TOTPSecret, &u.TOTPPending, &u.TOTPLastStep, &u.CreatedAt, &u.Disabled, &u.MFAExempt)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -86,14 +88,16 @@ type UserUpdate struct {
 	Role       *string
 	QuotaBytes *int64
 	Disabled   *bool
+	MFAExempt  *bool
 }
 
 func (s *Store) UpdateUser(ctx context.Context, id int64, up UserUpdate) error {
 	return affected(s.pool.Exec(ctx, `UPDATE users SET
 		role = COALESCE($2, role),
 		quota_bytes = COALESCE($3, quota_bytes),
-		disabled = COALESCE($4, disabled)
-		WHERE id = $1`, id, up.Role, up.QuotaBytes, up.Disabled))
+		disabled = COALESCE($4, disabled),
+		mfa_exempt = COALESCE($5, mfa_exempt)
+		WHERE id = $1`, id, up.Role, up.QuotaBytes, up.Disabled, up.MFAExempt))
 }
 
 func (s *Store) SetPassword(ctx context.Context, id int64, hash string) error {

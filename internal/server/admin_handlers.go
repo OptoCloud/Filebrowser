@@ -61,6 +61,8 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, out)
 }
 
+const errAdminExempt = "admins always need two-factor authentication; only other users can be exempted"
+
 func validRole(r string) bool { return r == "admin" || r == "user" }
 
 func cleanGrants(in []store.Grant) ([]store.Grant, bool) {
@@ -82,6 +84,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		Role       string        `json:"role"`
 		QuotaBytes int64         `json:"quota_bytes"`
 		Grants     []store.Grant `json:"grants"`
+		MFAExempt  bool          `json:"mfa_exempt"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
@@ -95,6 +98,10 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validRole(req.Role) || req.QuotaBytes < 0 {
 		httpx.Error(w, http.StatusBadRequest, "invalid role or quota")
+		return
+	}
+	if req.MFAExempt && req.Role == "admin" {
+		httpx.Error(w, http.StatusBadRequest, errAdminExempt)
 		return
 	}
 	grants, ok := cleanGrants(req.Grants)
@@ -127,7 +134,14 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, r, err)
 		return
 	}
-	s.audit.Log(ctx, audit.AdminUserCreate, u.Username, map[string]any{"role": u.Role, "grants": grants})
+	if req.MFAExempt {
+		if err := s.store.UpdateUser(ctx, u.ID, store.UserUpdate{MFAExempt: &req.MFAExempt}); err != nil {
+			httpx.InternalError(w, r, err)
+			return
+		}
+		u.MFAExempt = true
+	}
+	s.audit.Log(ctx, audit.AdminUserCreate, u.Username, map[string]any{"role": u.Role, "grants": grants, "mfa_exempt": u.MFAExempt})
 	httpx.JSON(w, http.StatusOK, userView{User: u, Grants: grants, HasPassword: hash != ""})
 }
 
@@ -136,6 +150,7 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		Role       *string `json:"role"`
 		QuotaBytes *int64  `json:"quota_bytes"`
 		Disabled   *bool   `json:"disabled"`
+		MFAExempt  *bool   `json:"mfa_exempt"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
@@ -151,6 +166,16 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid role or quota")
 		return
 	}
+	// Admins always need a second factor; promoting an exempt user ends the exemption.
+	willBeAdmin := target.IsAdmin() && (req.Role == nil || *req.Role == "admin") || req.Role != nil && *req.Role == "admin"
+	if req.MFAExempt != nil && *req.MFAExempt && willBeAdmin {
+		httpx.Error(w, http.StatusBadRequest, errAdminExempt)
+		return
+	}
+	if willBeAdmin && target.MFAExempt && req.MFAExempt == nil {
+		off := false
+		req.MFAExempt = &off
+	}
 	demote := req.Role != nil && *req.Role != "admin" && target.IsAdmin()
 	disable := req.Disabled != nil && *req.Disabled && !target.Disabled
 	if (demote || disable) && target.IsAdmin() {
@@ -163,7 +188,7 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.store.UpdateUser(ctx, uid, store.UserUpdate{Role: req.Role, QuotaBytes: req.QuotaBytes, Disabled: req.Disabled}); err != nil {
+	if err := s.store.UpdateUser(ctx, uid, store.UserUpdate{Role: req.Role, QuotaBytes: req.QuotaBytes, Disabled: req.Disabled, MFAExempt: req.MFAExempt}); err != nil {
 		httpx.FileError(w, r, err)
 		return
 	}
@@ -323,6 +348,7 @@ func (s *Server) handleAdminCreateInvite(w http.ResponseWriter, r *http.Request)
 		GrantPath *string `json:"grant_path"`
 		GrantPerm *string `json:"grant_perm"`
 		ExpiresIn int64   `json:"expires_in"`
+		MFAExempt bool    `json:"mfa_exempt"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
@@ -332,6 +358,10 @@ func (s *Server) handleAdminCreateInvite(w http.ResponseWriter, r *http.Request)
 	}
 	if !validRole(req.Role) {
 		httpx.Error(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+	if req.MFAExempt && req.Role == "admin" {
+		httpx.Error(w, http.StatusBadRequest, errAdminExempt)
 		return
 	}
 	if (req.GrantPath == nil) != (req.GrantPerm == nil) {
@@ -354,12 +384,12 @@ func (s *Server) handleAdminCreateInvite(w http.ResponseWriter, r *http.Request)
 	me := httpx.IdentityFrom(ctx)
 	token := auth.NewToken(24)
 	inv := &store.Invite{TokenHash: s.keys.HashToken(token), Role: req.Role, GrantPath: req.GrantPath,
-		GrantPerm: req.GrantPerm, CreatedBy: &me.User.ID, ExpiresAt: time.Now().Add(exp).UTC()}
+		GrantPerm: req.GrantPerm, CreatedBy: &me.User.ID, ExpiresAt: time.Now().Add(exp).UTC(), MFAExempt: req.MFAExempt}
 	if err := s.store.CreateInvite(ctx, inv); err != nil {
 		httpx.InternalError(w, r, err)
 		return
 	}
-	s.audit.Log(ctx, audit.AdminInvite, strconv.FormatInt(inv.ID, 10), map[string]any{"role": inv.Role, "grant_path": inv.GrantPath})
+	s.audit.Log(ctx, audit.AdminInvite, strconv.FormatInt(inv.ID, 10), map[string]any{"role": inv.Role, "grant_path": inv.GrantPath, "mfa_exempt": inv.MFAExempt})
 	httpx.JSON(w, http.StatusOK, map[string]any{"invite": inv, "url": s.cfg.AppOrigin + "/invite/" + token})
 }
 
