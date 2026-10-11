@@ -51,7 +51,7 @@ internet -> Cloudflare Tunnel -> Go binary (unprivileged LXC on pve01)
 - Quotas: ZFS dataset quota; optional per-user quota in the app.
 - Previews: images, audio, video, PDF (sandboxed iframe on the share origin).
 - Thumbnails: lazy generation, cached on disk.
-- Media streaming: direct play, cached remux, live HLS audio transcode (see Media pipeline).
+- Media streaming: direct play, live HLS remux / audio transcode (see Media pipeline).
 - "Open in VLC/mpv" fallback via short-lived signed URL.
 - Admin page: manage users, revoke sessions, view audit log.
 - Mobile-friendly UI.
@@ -127,7 +127,7 @@ Uses the distribution's ffmpeg (Debian 13: 7.1, security-supported; jellyfin-ffm
    | Case | Action |
    |---|---|
    | Browser supports container and codecs (FLAC, MP4, WebM, some MKV) | Direct play with range requests |
-   | MKV with supported video and audio codecs | Remux to fragmented MP4 (`-c copy`), cached |
+   | MKV with supported video and audio codecs (or a non-first audio track) | Live HLS: fragmented MP4, video and audio copied (audio-only files: cached remux) |
    | Unsupported audio (AC3, DTS, TrueHD) | Live HLS: copy video, transcode audio to stereo AAC while playing (audio-only files: cached AAC transcode) |
    | Text subtitles (SRT, ASS) | Convert to WebVTT, cached |
    | Unsupported video (HEVC on non-Safari, old codecs) | v1: "Open in VLC" fallback. v2: live transcode |

@@ -20,9 +20,9 @@ import (
 	"filebrowser/internal/files"
 )
 
-// Live HLS: video is copied and audio transcoded while the file plays, in
-// segments generated on demand, instead of converting the whole file before
-// playback starts.
+// Live HLS: video is copied and audio copied or transcoded while the file
+// plays, in segments generated on demand, instead of repackaging or
+// converting the whole file before playback starts.
 //
 // Segments are cut at video keyframes, so with the video copied the playlist
 // is planned from the keyframe list (Matroska cues, else a packet scan). One
@@ -87,7 +87,7 @@ func (h *hlsSession) broadcast() {
 // may need a keyframe scan) on first use.
 func (s *Service) hlsSession(ctx context.Context, userID int64, path, variant string) (*hlsSession, error) {
 	spec, err := parseVariant(variant)
-	if err != nil || spec.audio < 0 {
+	if err != nil {
 		return nil, files.ErrBadPath
 	}
 	fi, err := s.fs.Stat(path)
@@ -119,7 +119,7 @@ func (s *Service) hlsSession(ctx context.Context, userID int64, path, variant st
 				nth++
 			}
 		}
-		if video == nil || !hasStream(probe, spec.audio, "audio") {
+		if video == nil || (spec.audio >= 0 && !hasStream(probe, spec.audio, "audio")) {
 			return nil, files.ErrBadPath
 		}
 		kf, err := s.keyframes(ctx, userID, path, video.Index, nth)
@@ -431,15 +431,21 @@ func (s *Service) hlsRun(ctx context.Context, h *hlsSession, r *hlsRun, userID i
 	// demuxer seeks to a keyframe at or before it, and earlier fragments are
 	// dropped below.
 	ss := strconv.FormatFloat(h.bounds[r.start]+0.001, 'f', 6, 64)
+	movflags := "+frag_keyframe+empty_moov+default_base_moof+frag_discont"
+	if h.spec.audio >= 0 && !h.spec.transcodeAudio {
+		// A copied AC3/E-AC3 track has its parameters in the first packet.
+		// Not with the AAC encoder: its delay merges the first fragments.
+		movflags += "+delay_moov"
+	}
 	cmd := s.runner.Command(ctx, "ffmpeg", in, "", func(input string) []string {
 		args := ffmpegArgs(input, "-copyts", "-seek_timestamp", "1", "-ss", ss)
-		// Stereo: AAC encoding must stay well ahead of playback on slow CPUs,
+		// Transcoded audio is stereo: AAC encoding must stay well ahead of playback on slow CPUs,
 		// and ffmpeg's encoder is several times slower for 5.1.
 		args = append(args, streamArgs(h.probe, h.video, h.spec, 2)...)
 		return append(args, "-sn", "-dn", "-map_chapters", "-1", "-map_metadata", "-1",
 			"-avoid_negative_ts", "disabled", "-output_ts_offset", strconv.FormatFloat(hlsTSOffset, 'f', -1, 64),
 			"-use_editlist", "0", "-f", "mp4",
-			"-movflags", "+frag_keyframe+empty_moov+default_base_moof+frag_discont", "pipe:1")
+			"-movflags", movflags, "pipe:1")
 	})
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -466,12 +472,18 @@ func (s *Service) hlsRun(ctx context.Context, h *hlsSession, r *hlsRun, userID i
 		return nil
 	}
 	err = s.hlsSplit(h, r, bufio.NewReaderSize(stdout, 1<<20), wait)
+	stopped := ctx.Err() != nil // stopped from outside, before the cancel below
 	if !waited {
 		r.cancel() // stop ffmpeg; its exit status no longer matters
 		_ = cmd.Wait()
 	}
-	if err != nil && ctx.Err() != nil {
+	switch {
+	case err == nil:
+		return nil
+	case stopped || errors.Is(err, errStopRun):
 		return errStopRun
+	case !waited:
+		return fmt.Errorf("%w (ffmpeg: %s)", err, bytes.TrimSpace(stderr.buf.Bytes()))
 	}
 	return err
 }
@@ -601,12 +613,12 @@ func (s *Service) hlsContinue(h *hlsSession, i int) error {
 	return nil
 }
 
-// snapKeyframe returns the keyframe time nearest to t, if close. Demuxers
-// can disagree by a few milliseconds (ffprobe's packet scan and ffmpeg read
-// MP4 edit lists differently), which must not move a fragment across a
-// segment boundary.
+// snapKeyframe returns the keyframe time nearest to t, if close. ffprobe's
+// packet scan and ffmpeg read MP4 edit lists differently, by up to the
+// B-frame delay or the audio priming, which must not move a fragment across
+// a segment boundary. Keyframes are much further apart than this.
 func snapKeyframe(kf []float64, t float64) float64 {
-	best, dist := t, 0.05
+	best, dist := t, 0.2
 	i := sort.SearchFloat64s(kf, t)
 	for _, j := range []int{i - 1, i} {
 		if j >= 0 && j < len(kf) && math.Abs(kf[j]-t) <= dist {

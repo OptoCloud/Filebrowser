@@ -37,7 +37,7 @@ func TestPlanSegments(t *testing.T) {
 		t.Errorf("sliver bounds = %v", got)
 	}
 	kf = []float64{0, 2, 6.5}
-	for _, c := range [][2]float64{{0.006, 0}, {-0.006, 0}, {1.96, 2}, {2.04, 2}, {2.2, 2.2}, {6.45, 6.5}, {7, 7}} {
+	for _, c := range [][2]float64{{0.006, 0}, {-0.083, 0}, {1.9, 2}, {2.15, 2}, {2.3, 2.3}, {6.45, 6.5}, {7, 7}} {
 		if got := snapKeyframe(kf, c[0]); got != c[1] {
 			t.Errorf("snapKeyframe(%v) = %v, want %v", c[0], got, c[1])
 		}
@@ -98,16 +98,23 @@ func TestMatroskaKeyframes(t *testing.T) {
 func TestHLS(t *testing.T) {
 	s, root := newService(t, "none")
 	ctx := context.Background()
-	// 40 s with B-frames, irregular keyframes (scene cuts) and AC3 audio.
+	// 40 s with B-frames, irregular keyframes (scene cuts), AC3 and AAC audio.
 	ffmpeg(t, "-f", "lavfi", "-i", "testsrc2=duration=40:size=320x240:rate=24", "-f", "lavfi", "-i", "sine=duration=40",
+		"-map", "0", "-map", "1", "-map", "1",
 		"-c:v", "libx264", "-preset", "veryfast", "-g", "72", "-keyint_min", "12", "-force_key_frames", "7.5,21.3",
-		"-pix_fmt", "yuv420p", "-c:a", "ac3", filepath.Join(root, "movie.mkv"))
+		"-pix_fmt", "yuv420p", "-c:a:0", "ac3", "-c:a:1", "aac", filepath.Join(root, "movie.mkv"))
 	// The same as MP4, which has no cues: keyframes come from a packet scan.
 	ffmpeg(t, "-i", filepath.Join(root, "movie.mkv"), "-c", "copy", filepath.Join(root, "movie.mp4"))
 
-	for _, name := range []string{"movie.mkv", "movie.mp4"} {
-		t.Run(name, func(t *testing.T) {
-			pl, err := s.HLSPlaylist(ctx, 1, name, "aac-a1", "init", func(n int) string { return "seg" + strconv.Itoa(n) })
+	for _, c := range []struct{ name, variant string }{
+		{"movie.mkv", "aac-a1"}, {"movie.mp4", "aac-a1"},
+		{"movie.mkv", "remux-a1"}, // AC3 copied
+		{"movie.mkv", "remux-a2"}, // AAC copied
+		{"movie.mkv", "remux-an"}, // no audio
+	} {
+		name, variant := c.name, c.variant
+		t.Run(name+"/"+variant, func(t *testing.T) {
+			pl, err := s.HLSPlaylist(ctx, 1, name, variant, "init", func(n int) string { return "seg" + strconv.Itoa(n) })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -140,14 +147,14 @@ func TestHLS(t *testing.T) {
 			}
 			// Seek first (a run starting mid-file), then play from the start.
 			seg := map[int][]byte{}
-			seg[4] = read(s.HLSSegment(ctx, 1, name, "aac-a1", 4))
-			init := read(s.HLSInit(ctx, 1, name, "aac-a1"))
+			seg[4] = read(s.HLSSegment(ctx, 1, name, variant, 4))
+			init := read(s.HLSInit(ctx, 1, name, variant))
 			for i := range durs {
 				if seg[i] == nil {
-					seg[i] = read(s.HLSSegment(ctx, 1, name, "aac-a1", i))
+					seg[i] = read(s.HLSSegment(ctx, 1, name, variant, i))
 				}
 			}
-			if _, err := s.HLSSegment(ctx, 1, name, "aac-a1", len(durs)); err == nil {
+			if _, err := s.HLSSegment(ctx, 1, name, variant, len(durs)); err == nil {
 				t.Error("segment past the end")
 			}
 
@@ -164,7 +171,7 @@ func TestHLS(t *testing.T) {
 					t.Fatalf("segment %d has no video", i)
 				}
 				// Within the keyframe snapping tolerance (MP4 edit lists).
-				if got := float64(ticks)/float64(timescale) - hlsTSOffset; math.Abs(got-start) > 0.01 {
+				if got := float64(ticks)/float64(timescale) - hlsTSOffset; math.Abs(got-start) > 0.1 {
 					t.Errorf("segment %d starts at %.3f, want %.3f", i, got, start)
 				}
 				start += d
@@ -180,7 +187,11 @@ func TestHLS(t *testing.T) {
 			if err := os.WriteFile(out, all.Bytes(), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			for _, st := range []string{"v:0", "a:0"} {
+			streams := []string{"v:0", "a:0"}
+			if variant == "remux-an" {
+				streams = streams[:1]
+			}
+			for _, st := range streams {
 				b, err := exec.Command("ffprobe", "-v", "error", "-select_streams", st, "-show_entries", "packet=pts_time",
 					"-of", "csv=p=0", out).Output()
 				if err != nil {

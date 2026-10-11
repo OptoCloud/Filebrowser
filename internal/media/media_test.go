@@ -53,11 +53,23 @@ func TestDecide(t *testing.T) {
 			t.Errorf("%s: got %s/%s, want %s/%s (%s)", c.name, plan.Mode, plan.Variant, c.mode, c.variant, plan.Reason)
 		}
 	}
-	// With HLS, video plays while its audio is converted; audio-only files
-	// are still converted ahead.
+	// With HLS, video plays while it is repackaged or its audio converted;
+	// audio-only files are still converted ahead.
 	hls := ParseCaps("c:mp4,c:hls,v:h264,a:aac")
-	if plan := Decide(mkv("h264", "ac3"), "a.mkv", hls, -1); plan.Mode != "hls" || plan.Variant != "aac-a1" {
-		t.Errorf("hls: %s %s", plan.Mode, plan.Variant)
+	for _, c := range []struct {
+		probe   *Probe
+		audio   int
+		variant string
+	}{
+		{mkv("h264", "ac3"), -1, "aac-a1"},
+		{mkv("h264", "aac"), -1, "remux-a1"},
+		{&Probe{Format: "mov,mp4,m4a,3gp,3g2,mj2", Streams: []Stream{{Index: 0, Type: "video", Codec: "h264"},
+			{Index: 1, Type: "audio", Codec: "aac"}, {Index: 2, Type: "audio", Codec: "aac"}}}, 2, "remux-a2"},
+		{&Probe{Format: "matroska,webm", Streams: []Stream{{Index: 0, Type: "video", Codec: "h264"}}}, -1, "remux-an"},
+	} {
+		if plan := Decide(c.probe, "a.mkv", hls, c.audio); plan.Mode != "hls" || plan.Variant != c.variant {
+			t.Errorf("hls %s: got %s %s", c.variant, plan.Mode, plan.Variant)
+		}
 	}
 	if plan := Decide(cases[6].probe, "a.m4a", hls, -1); plan.Mode != "transcode" {
 		t.Errorf("audio-only hls: %s", plan.Mode)
