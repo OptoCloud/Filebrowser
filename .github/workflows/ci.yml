@@ -106,4 +106,9 @@ jobs:
         run: |
           Get-Service postgresql* | Set-Service -StartupType Manual -PassThru | Start-Service
           choco install ffmpeg -y --no-progress
+          # Put the real ffmpeg ahead of Chocolatey's shim: the shim starts
+          # ffmpeg as a child process, which the sandbox's one-process job
+          # limit forbids.
+          $bin = (Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - run: go test -count=1 ./...
