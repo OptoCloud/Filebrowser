@@ -1,0 +1,51 @@
+# docker compose -f deploy/docker/compose.yml up -d
+# Update: docker compose pull && docker compose up -d
+name: filebrowser
+
+services:
+  filebrowser:
+    image: ghcr.io/optocloud/filebrowser:latest
+    # build: ../..   # or build from this checkout
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FB_DATABASE_URL: postgres://filebrowser:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres/filebrowser?sslmode=disable
+      FB_APP_ORIGIN: ${FB_APP_ORIGIN:?set FB_APP_ORIGIN in .env}
+      FB_SHARE_ORIGIN: ${FB_SHARE_ORIGIN:?set FB_SHARE_ORIGIN in .env}
+    ports:
+      - "127.0.0.1:8080:8080" # put a TLS proxy or Cloudflare Tunnel in front
+    volumes:
+      - ${FILES_DIR:-./files}:/srv/files
+      - data:/var/lib/filebrowser
+      - cache:/var/cache/filebrowser
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    # The ffmpeg sandbox (bubblewrap) builds unprivileged user namespaces.
+    # The seccomp profile is Docker's default plus the namespace and mount
+    # syscalls it needs; Docker's AppArmor profile forbids mount entirely.
+    # Never add capabilities or "privileged" instead.
+    security_opt:
+      - seccomp=./seccomp-bwrap.json
+      - apparmor=unconfined
+
+  postgres:
+    image: postgres:17-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: filebrowser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: filebrowser
+    volumes:
+      - pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "filebrowser"]
+      interval: 5s
+      retries: 20
+
+volumes:
+  data:
+  cache:
+  pg:

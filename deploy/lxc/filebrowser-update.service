@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for (or install) filebrowser updates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/filebrowser-update --auto
+# 10 = an update is available but AUTO_UPDATE is not "yes" (see the journal).
+SuccessExitStatus=10

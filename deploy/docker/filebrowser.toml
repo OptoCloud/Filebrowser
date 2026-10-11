@@ -1,0 +1,17 @@
+# Configuration baked into the Docker image. Override by mounting your own
+# file at /etc/filebrowser/filebrowser.toml. FB_DATABASE_URL comes from the
+# environment (see compose.yml).
+listen = "0.0.0.0:8080"
+app_origin = "https://files.example.com"
+share_origin = "https://share.example.com"
+files_root = "/srv/files"
+data_dir = "/var/lib/filebrowser"
+cache_dir = "/var/cache/filebrowser"
+# The reverse proxy / tunnel in front of the container.
+# trusted_proxies = ["172.16.0.0/12"]
+# trusted_ip_header = "CF-Connecting-IP"
+
+[media]
+ffmpeg = "/usr/bin/ffmpeg"
+ffprobe = "/usr/bin/ffprobe"
+sandbox = "bwrap"

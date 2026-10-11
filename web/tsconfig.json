@@ -1,0 +1,21 @@
+{
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "strict": true,
+    "moduleResolution": "bundler",
+    // svelte-check resolves `.svelte` imports itself and only understands tsconfig
+    // `paths`, not package.json `imports`. Mirror the `#lib/*` subpath here so
+    // components imported through it keep their prop types.
+    "paths": {
+      "#lib/*": ["./src/lib/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts", "eslint.config.js"]
+}

@@ -1,0 +1,215 @@
+#!/bin/bash
+# filebrowser-update: install or update filebrowser from GitHub releases.
+#
+#   filebrowser-update               update to the latest release (if newer)
+#   filebrowser-update --check       report whether an update is available (exit 10 if so)
+#   filebrowser-update --version vX  install a specific release
+#   filebrowser-update --from DIR    install from downloaded release files (offline)
+#   filebrowser-update --rollback    switch back to the previously installed version
+#   filebrowser-update --auto        what the timer runs: update if AUTO_UPDATE=yes, else --check
+#
+# Every update: verifies SHA256SUMS (and its SSH signature when
+# /etc/filebrowser/release_signers exists), backs up the database, installs
+# the new version side by side, restarts the service, waits for the health
+# check and rolls back automatically if it fails.
+#
+# Settings: /etc/filebrowser/update.env (FB_REPO, GITHUB_TOKEN, AUTO_UPDATE).
+set -euo pipefail
+umask 022
+
+ETC=/etc/filebrowser
+LIB=/usr/local/lib/filebrowser
+BACKUPS=/var/backups/filebrowser
+SERVICE=filebrowser
+FB_REPO=optocloud/filebrowser
+GITHUB_TOKEN=
+AUTO_UPDATE=no
+KEEP_BACKUPS=5
+# shellcheck disable=SC1091
+[ -r "$ETC/update.env" ] && . "$ETC/update.env"
+
+log() { echo "filebrowser-update: $*" >&2; }
+die() { log "error: $*"; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root"
+
+case "$(dpkg --print-architecture)" in
+	amd64) ARCH=amd64 ;;
+	arm64) ARCH=arm64 ;;
+	*) die "unsupported architecture $(dpkg --print-architecture)" ;;
+esac
+BIN_NAME=filebrowser-linux-$ARCH
+
+api() {
+	curl -fsSL --proto '=https' -H "Accept: application/vnd.github+json" \
+		${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} "https://api.github.com/repos/$FB_REPO/$1"
+}
+
+current_version() {
+	if [ -x "$LIB/current/filebrowser" ]; then "$LIB/current/filebrowser" version; else echo none; fi
+}
+
+# fetch_release TAG DIR: download the release's files for this host into DIR.
+fetch_release() {
+	local tag=$1 dir=$2 rel name id
+	if [ "$tag" = latest ]; then tag=releases/latest; else tag=releases/tags/$tag; fi
+	rel=$(api "$tag") || die "cannot read $tag of $FB_REPO (private repository? set GITHUB_TOKEN in $ETC/update.env)"
+	for name in "$BIN_NAME" deploy.tar.gz SHA256SUMS SHA256SUMS.sig; do
+		id=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .id' <<<"$rel")
+		if [ -z "$id" ]; then
+			[ "$name" = SHA256SUMS.sig ] && continue
+			die "release $tag has no $name"
+		fi
+		curl -fsSL --proto '=https' -H "Accept: application/octet-stream" \
+			${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+			-o "$dir/$name" "https://api.github.com/repos/$FB_REPO/releases/assets/$id"
+	done
+}
+
+verify() {
+	local dir=$1
+	if [ -f "$ETC/release_signers" ]; then
+		[ -f "$dir/SHA256SUMS.sig" ] || die "release is unsigned but $ETC/release_signers requires a signature"
+		ssh-keygen -Y verify -f "$ETC/release_signers" -I filebrowser-release -n filebrowser-release \
+			-s "$dir/SHA256SUMS.sig" <"$dir/SHA256SUMS" >/dev/null || die "SHA256SUMS signature is invalid"
+	fi
+	(cd "$dir" && grep -E "[ *]($BIN_NAME|deploy\.tar\.gz)\$" SHA256SUMS | sha256sum -c --quiet -) ||
+		die "checksum mismatch"
+}
+
+healthy() {
+	for _ in $(seq 1 30); do
+		if (set -a && . "$ETC/env" && "$LIB/current/filebrowser" -config "$ETC/filebrowser.toml" health) >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+	return 1
+}
+
+# switch_to VERSION_DIR: point "current" at it and restart.
+switch_to() {
+	ln -sfn "$1" "$LIB/current.new" && mv -T "$LIB/current.new" "$LIB/current"
+	ln -sfn "$LIB/current/filebrowser" /usr/local/bin/filebrowser
+	if systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
+		systemctl restart "$SERVICE"
+	fi
+}
+
+# install_units DIR: refresh systemd units shipped with the release.
+install_units() {
+	local d=$1/deploy changed=0 f src
+	for f in filebrowser.service lxc/filebrowser-update.service lxc/filebrowser-update.timer; do
+		src=$d/$f
+		[ -f "$src" ] || continue
+		if ! cmp -s "$src" "/etc/systemd/system/$(basename "$f")"; then
+			install -m 0644 "$src" "/etc/systemd/system/$(basename "$f")"
+			changed=1
+		fi
+	done
+	install -m 0755 "$d/lxc/filebrowser-update" /usr/local/sbin/filebrowser-update
+	[ "$changed" = 1 ] && systemctl daemon-reload
+	return 0
+}
+
+backup_db() {
+	local tag=$1 file
+	[ -x "$LIB/current/filebrowser" ] || return 0 # first install
+	install -d -m 0700 "$BACKUPS"
+	file=$BACKUPS/before-$tag-$(date +%Y%m%d-%H%M%S).dump
+	runuser -u postgres -- pg_dump -Fc filebrowser >"$file" || die "database backup failed; not updating"
+	log "database backed up to $file"
+	ls -1t "$BACKUPS"/before-*.dump 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
+	echo "$file"
+}
+
+install_dir() {
+	local ver dir prev oldprev backup f
+	# Work on a private copy, so what is verified is what gets installed.
+	WORK=$(mktemp -d)
+	trap 'rm -rf "${WORK:-}" "${tmp:-}"' EXIT
+	for f in "$BIN_NAME" deploy.tar.gz SHA256SUMS SHA256SUMS.sig; do
+		[ -f "$1/$f" ] && cp "$1/$f" "$WORK/"
+	done
+	verify "$WORK"
+	chmod 0755 "$WORK/$BIN_NAME"
+	ver=$("$WORK/$BIN_NAME" version)
+	[[ "$ver" =~ ^v[0-9A-Za-z.+-]+$ ]] || die "unexpected version string '$ver'"
+	dir=$LIB/$ver
+	prev=$(readlink -f "$LIB/current" 2>/dev/null || true)
+	oldprev=$(readlink -f "$LIB/previous" 2>/dev/null || true)
+	[ "$prev" = "$dir" ] && { log "$ver is already installed"; return 0; }
+
+	backup=$(backup_db "$ver")
+	install -d -m 0755 "$LIB" "$dir"
+	install -m 0755 "$WORK/$BIN_NAME" "$dir/filebrowser"
+	tar -xzf "$WORK/deploy.tar.gz" -C "$dir"
+	install_units "$dir"
+	[ -n "$prev" ] && ln -sfn "$prev" "$LIB/previous"
+	switch_to "$dir"
+
+	if systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
+		if ! healthy; then
+			log "$ver failed its health check"
+			if [ -n "$prev" ]; then
+				log "rolling back to $(basename "$prev")"
+				switch_to "$prev"
+				if [ -n "$oldprev" ]; then ln -sfn "$oldprev" "$LIB/previous"; else rm -f "$LIB/previous"; fi
+				rm -rf "$dir"
+				healthy && log "rolled back" || log "the previous version is not healthy either"
+				[ -n "$backup" ] && log "if a migration ran, restore with: runuser -u postgres -- pg_restore --clean -d filebrowser $backup"
+			fi
+			journalctl -u "$SERVICE" -n 30 --no-pager >&2 || true
+			exit 1
+		fi
+	fi
+	log "installed $ver"
+	# Keep only the current and previous versions.
+	for d in "$LIB"/v*; do
+		[ "$d" = "$dir" ] || [ "$d" = "$prev" ] || rm -rf "$d"
+	done
+}
+
+cmd=${1:-update}
+case "$cmd" in
+	--check | update | --auto | --version | --from | --rollback) ;;
+	-h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+	*) die "unknown option $cmd (see --help)" ;;
+esac
+
+if [ "$cmd" = --from ]; then
+	[ -d "${2:-}" ] || die "--from needs a directory"
+	install_dir "$2"
+	exit 0
+fi
+if [ "$cmd" = --rollback ]; then
+	prev=$(readlink -f "$LIB/previous" 2>/dev/null || true)
+	[ -n "$prev" ] && [ -d "$prev" ] || die "no previous version"
+	cur=$(readlink -f "$LIB/current")
+	switch_to "$prev"
+	ln -sfn "$cur" "$LIB/previous"
+	healthy || die "$(basename "$prev") is not healthy"
+	log "rolled back to $(basename "$prev")"
+	exit 0
+fi
+
+tag=latest
+[ "$cmd" = --version ] && tag=${2:?--version needs a tag}
+cur=$(current_version)
+if [ "$tag" = latest ]; then
+	rel=$(api releases/latest) ||
+		die "cannot read the releases of $FB_REPO (private repository? set GITHUB_TOKEN in $ETC/update.env)"
+	tag=$(jq -r .tag_name <<<"$rel")
+	[ -n "$tag" ] && [ "$tag" != null ] || die "could not determine the latest release"
+fi
+if [ "$cmd" = --check ] || { [ "$cmd" = --auto ] && [ "$AUTO_UPDATE" != yes ]; }; then
+	if [ "$tag" = "$cur" ]; then log "up to date ($cur)"; exit 0; fi
+	log "update available: $cur -> $tag (run filebrowser-update)"
+	exit 10
+fi
+[ "$tag" = "$cur" ] && [ "$cmd" != --version ] && { log "up to date ($cur)"; exit 0; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+log "downloading $tag"
+fetch_release "$tag" "$tmp"
+install_dir "$tmp"

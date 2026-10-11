@@ -1,0 +1,10 @@
+/filebrowser
+/filebrowser.exe
+/dist/
+/filebrowser.toml
+/data/
+/cache/
+/files/
+*.test
+coverage.out
+preview/

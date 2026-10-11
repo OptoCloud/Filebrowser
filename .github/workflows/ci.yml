@@ -1,0 +1,109 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: web/.nvmrc
+      - name: Install pnpm (version from packageManager)
+        run: npm install -g "$(node -p "require('./package.json').packageManager")"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm run check
+      - run: pnpm run lint
+      - run: pnpm run test:unit --run
+      - run: pnpm run build
+      - run: pnpm audit --prod --audit-level moderate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-build
+          path: web/build
+
+  go:
+    needs: web
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: filebrowser
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: filebrowser
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U filebrowser" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FB_TEST_DATABASE_URL: postgres://filebrowser:ci@localhost:5432/filebrowser?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: web-build
+          path: web/build
+      - run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@452d5bb86b45416c35891262f6a11dbd6a970117 ./...
+      - name: Test on Debian 13 (deployment target)
+        run: |
+          # Ubuntu runners restrict unprivileged user namespaces, which bubblewrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          go mod download
+          docker run --rm --network host \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            -e FB_TEST_DATABASE_URL \
+            -v "$GITHUB_WORKSPACE:/src:ro" -v "$(go env GOROOT):/usr/local/go:ro" -v "$(go env GOMODCACHE):/gomod:ro" \
+            debian:13 bash /src/.github/ci/debian-test.sh
+      - name: gosec
+        # Pinned to a commit whose x/tools reads Go 1.27 export data (the latest release cannot).
+        run: go run github.com/securego/gosec/v2/cmd/gosec@7b1b5cebe007d62fb58eacb90fc571112939ec30 -exclude-generated ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - run: CGO_ENABLED=0 go build -trimpath -o dist/filebrowser ./cmd/filebrowser
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: semgrep scan --config p/golang --config p/javascript --config p/secrets --error
+
+  windows:
+    # Windows is a supported target: run the suite there too, including the
+    # AppContainer sandbox test, against the runner's preinstalled PostgreSQL.
+    needs: web
+    runs-on: windows-latest
+    env:
+      FB_TEST_DATABASE_URL: postgres://postgres:root@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: web-build
+          path: web/build
+      - name: Start PostgreSQL and install ffmpeg
+        shell: pwsh
+        run: |
+          Get-Service postgresql* | Set-Service -StartupType Manual -PassThru | Start-Service
+          choco install ffmpeg -y --no-progress
+      - run: go test -count=1 ./...

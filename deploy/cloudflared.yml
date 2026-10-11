@@ -1,0 +1,14 @@
+# /etc/cloudflared/config.yml
+tunnel: <tunnel-uuid>
+credentials-file: /etc/cloudflared/<tunnel-uuid>.json
+
+ingress:
+  - hostname: files.example.com
+    service: http://127.0.0.1:8080
+    originRequest:
+      # Uploads use tus with 50 MiB chunks; streams are long-lived.
+      connectTimeout: 30s
+      noHappyEyeballs: true
+  - hostname: share.example.com
+    service: http://127.0.0.1:8080
+  - service: http_status:404

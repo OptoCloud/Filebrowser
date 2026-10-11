@@ -1,0 +1,55 @@
+[Unit]
+Description=filebrowser
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=filebrowser
+Group=filebrowser
+ExecStart=/usr/local/bin/filebrowser -config /etc/filebrowser/filebrowser.toml serve
+# FB_DATABASE_URL=postgres://filebrowser:...@localhost/filebrowser
+EnvironmentFile=/etc/filebrowser/env
+Restart=on-failure
+RestartSec=5
+
+# Writable paths: app data, caches, and the shared files (uploads, trash).
+ReadWritePaths=/var/lib/filebrowser /var/cache/filebrowser /srv/share
+StateDirectory=filebrowser
+CacheDirectory=filebrowser
+StateDirectoryMode=0700
+CacheDirectoryMode=0750
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+# RestrictSUIDSGID is omitted: it breaks bubblewrap 0.12 bind mounts (ENOSYS), and
+# NoNewPrivileges plus the empty CapabilityBoundingSet already make setuid bits inert.
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+# AF_NETLINK: bubblewrap configures loopback in the sandbox's own network namespace.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+# bubblewrap (ffmpeg sandbox) needs namespaces and mount syscalls, and prlimit
+# needs @resources, so namespaces are not restricted here.
+SystemCallFilter=@system-service @mount @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+LimitNOFILE=65536
+MemoryMax=8G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

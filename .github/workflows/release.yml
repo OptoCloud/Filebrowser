@@ -1,0 +1,79 @@
+name: release
+
+# Push a tag like v1.2.3 to publish a release. The LXC updater
+# (deploy/filebrowser-update) installs the newest release from here.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: web/.nvmrc
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Build web
+        working-directory: web
+        run: |
+          npm install -g "$(node -p "require('./package.json').packageManager")"
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Build binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION" -o dist/filebrowser-linux-$arch ./cmd/filebrowser
+          done
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
+            -ldflags="-s -w -X main.version=$VERSION" -o dist/filebrowser-windows-amd64.exe ./cmd/filebrowser
+          tar -czf dist/deploy.tar.gz deploy
+          (cd dist && sha256sum filebrowser-* deploy.tar.gz > SHA256SUMS)
+      - name: Sign checksums
+        # Optional: an SSH signing key (private key in the RELEASE_SSH_KEY secret).
+        # Hosts that have /etc/filebrowser/release_signers refuse unsigned releases.
+        env:
+          RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
+        if: env.RELEASE_SSH_KEY != ''
+        run: |
+          umask 077
+          printf '%s\n' "$RELEASE_SSH_KEY" > "$RUNNER_TEMP/key"
+          ssh-keygen -Y sign -f "$RUNNER_TEMP/key" -n filebrowser-release dist/SHA256SUMS
+          rm -f "$RUNNER_TEMP/key"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --generate-notes dist/*
+
+  image:
+    # Docker image (Debian 13 slim) for linux/amd64 and linux/arm64.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Build and push
+        env:
+          VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx create --use
+          docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION="$VERSION" \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" --push .

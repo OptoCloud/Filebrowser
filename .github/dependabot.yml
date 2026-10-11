@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      go: { patterns: ["*"] }
+  - package-ecosystem: npm # pnpm lockfile
+    directory: /web
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      npm: { patterns: ["*"] }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    cooldown: { default-days: 7 }
+  # Base images in Dockerfile (node, golang, debian) and the compose file.
+  - package-ecosystem: docker
+    directories: ["/", "/deploy/docker"]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    ignore:
+      # Node majors are switched deliberately, LTS lines only (web/.nvmrc).
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
