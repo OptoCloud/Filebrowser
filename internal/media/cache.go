@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Thumbnails and subtitles are small and not tracked by size like remuxed
+// Thumbnails, subtitles and keyframe lists are small and not tracked by size like remuxed
 // variants. Using one refreshes its modification time (at most daily), and
 // files unused for staleAfter are deleted; they are regenerated on demand.
 const staleAfter = 60 * 24 * time.Hour
@@ -23,7 +23,7 @@ func cached(p string) bool {
 	return true
 }
 
-// evictStale deletes thumbnails and subtitles unused for staleAfter. It walks
+// evictStale deletes thumbnails, subtitles and keyframe lists unused for staleAfter. It walks
 // the cache at most once a day.
 func (s *Service) evictStale() {
 	s.jobsMu.Lock()
@@ -41,7 +41,7 @@ func (s *Service) evictStale() {
 	}
 	defer root.Close()
 	cutoff := time.Now().Add(-staleAfter)
-	for _, kind := range []string{"thumbs", "subs"} {
+	for _, kind := range []string{"thumbs", "subs", "keyframes"} {
 		_ = fs.WalkDir(root.FS(), kind, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil

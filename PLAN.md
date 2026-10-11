@@ -51,7 +51,7 @@ internet -> Cloudflare Tunnel -> Go binary (unprivileged LXC on pve01)
 - Quotas: ZFS dataset quota; optional per-user quota in the app.
 - Previews: images, audio, video, PDF (sandboxed iframe on the share origin).
 - Thumbnails: lazy generation, cached on disk.
-- Media streaming: direct play, plus cached remux / audio transcode (see Media pipeline).
+- Media streaming: direct play, cached remux, live HLS audio transcode (see Media pipeline).
 - "Open in VLC/mpv" fallback via short-lived signed URL.
 - Admin page: manage users, revoke sessions, view audit log.
 - Mobile-friendly UI.
@@ -128,11 +128,12 @@ Uses the distribution's ffmpeg (Debian 13: 7.1, security-supported; jellyfin-ffm
    |---|---|
    | Browser supports container and codecs (FLAC, MP4, WebM, some MKV) | Direct play with range requests |
    | MKV with supported video and audio codecs | Remux to fragmented MP4 (`-c copy`), cached |
-   | Unsupported audio (AC3, DTS, TrueHD) | Copy video, transcode audio to AAC/Opus, cached |
+   | Unsupported audio (AC3, DTS, TrueHD) | Live HLS: copy video, transcode audio to stereo AAC while playing (audio-only files: cached AAC transcode) |
    | Text subtitles (SRT, ASS) | Convert to WebVTT, cached |
    | Unsupported video (HEVC on non-Safari, old codecs) | v1: "Open in VLC" fallback. v2: live transcode |
-4. **Cache:** remuxed/transcoded files stored in a cache dataset with LRU eviction and a size cap. Generated on first play (with progress UI) or by a background job. After that, playback is plain direct play with free seeking.
-5. **External player:** short-lived HMAC-signed URL for VLC/mpv, scoped to one file.
+4. **Live HLS:** segments are planned from the video keyframes (Matroska cues, else an ffprobe packet scan) and made on request by one ffmpeg run per stream, which writes fragmented MP4 with source timestamps to a pipe; a seek restarts the run there. Segments are kept for the session (the hourly cleanup deletes them once unused for 30 minutes), and a run stops 2 minutes ahead of playback.
+5. **Cache:** remuxed/transcoded files stored in a cache dataset with LRU eviction and a size cap. Generated on first play (with progress UI) or by a background job. After that, playback is plain direct play with free seeking.
+6. **External player:** short-lived HMAC-signed URL for VLC/mpv, scoped to one file.
 
 ## Data model (PostgreSQL)
 

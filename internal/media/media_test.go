@@ -53,6 +53,15 @@ func TestDecide(t *testing.T) {
 			t.Errorf("%s: got %s/%s, want %s/%s (%s)", c.name, plan.Mode, plan.Variant, c.mode, c.variant, plan.Reason)
 		}
 	}
+	// With HLS, video plays while its audio is converted; audio-only files
+	// are still converted ahead.
+	hls := ParseCaps("c:mp4,c:hls,v:h264,a:aac")
+	if plan := Decide(mkv("h264", "ac3"), "a.mkv", hls, -1); plan.Mode != "hls" || plan.Variant != "aac-a1" {
+		t.Errorf("hls: %s %s", plan.Mode, plan.Variant)
+	}
+	if plan := Decide(cases[6].probe, "a.m4a", hls, -1); plan.Mode != "transcode" {
+		t.Errorf("audio-only hls: %s", plan.Mode)
+	}
 	plan := Decide(mkv("h264", "aac"), "a.mkv", chrome, -1)
 	if len(plan.Subtitles) != 1 || plan.Subtitles[0].Track != 2 {
 		t.Errorf("subtitles = %+v (image subs must be excluded)", plan.Subtitles)

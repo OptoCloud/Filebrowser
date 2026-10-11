@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -113,6 +115,72 @@ func (s *Server) handleMediaStream(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.UserContentHeaders(w, "video/mp4", true, files.Base(p)+".mp4")
 	w.Header().Set("Cache-Control", "private, max-age=3600")
+	serveOpened(w, r, f)
+}
+
+// handleHLSPlaylist serves the live HLS playlist of a variant. Segment URLs
+// are relative to it.
+func (s *Server) handleHLSPlaylist(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	p, id, ok := s.mediaPath(w, r, q.Get("path"))
+	if !ok {
+		return
+	}
+	variant := q.Get("variant")
+	base := url.Values{"path": {q.Get("path")}, "variant": {variant}}
+	seg := func(n int) string {
+		v := url.Values{"path": base["path"], "variant": base["variant"], "n": {strconv.Itoa(n)}}
+		return "segment?" + v.Encode()
+	}
+	pl, err := s.media.HLSPlaylist(r.Context(), id.User.ID, p, variant, "init?"+base.Encode(), seg)
+	if err != nil {
+		mediaError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(pl) // #nosec G705 -- an HLS playlist, not HTML: nosniff and a sandbox CSP
+}
+
+func (s *Server) handleHLSInit(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	p, id, ok := s.mediaPath(w, r, q.Get("path"))
+	if !ok {
+		return
+	}
+	f, err := s.media.HLSInit(r.Context(), id.User.ID, p, q.Get("variant"))
+	if err != nil {
+		mediaError(w, r, err)
+		return
+	}
+	serveHLSPart(w, r, f, "init.mp4")
+}
+
+func (s *Server) handleHLSSegment(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	p, id, ok := s.mediaPath(w, r, q.Get("path"))
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(q.Get("n"))
+	if err != nil || n < 0 {
+		httpx.FileError(w, r, files.ErrBadPath)
+		return
+	}
+	f, err := s.media.HLSSegment(r.Context(), id.User.ID, p, q.Get("variant"), n)
+	if err != nil {
+		mediaError(w, r, err)
+		return
+	}
+	serveHLSPart(w, r, f, strconv.Itoa(n)+".m4s")
+}
+
+func serveHLSPart(w http.ResponseWriter, r *http.Request, f *os.File, name string) {
+	httpx.UserContentHeaders(w, "video/mp4", true, name)
+	// Not cached: the URL stays the same when the file changes.
+	w.Header().Set("Cache-Control", "private, no-cache")
 	serveOpened(w, r, f)
 }
 

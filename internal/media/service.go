@@ -38,6 +38,10 @@ type Service struct {
 	jobsMu         sync.Mutex
 	jobs           map[string]*Job
 	lastStaleEvict time.Time
+
+	hlsMu    sync.Mutex
+	hls      map[string]*hlsSession
+	hlsPlans flights[*hlsSession]
 }
 
 func NewService(cfg config.Media, st *store.Store, fsys *files.FS, filesRoot, cacheDir string) (*Service, error) {
@@ -49,9 +53,10 @@ func NewService(cfg config.Media, st *store.Store, fsys *files.FS, filesRoot, ca
 	if err != nil {
 		return nil, err
 	}
-	// Leftovers of interrupted jobs.
+	// Leftovers of interrupted jobs and live streams.
 	_ = os.RemoveAll(filepath.Join(cacheAbs, ".jobs"))
-	for _, d := range []string{"thumbs", "media", "subs", ".jobs"} {
+	_ = os.RemoveAll(filepath.Join(cacheAbs, "hls"))
+	for _, d := range []string{"thumbs", "media", "subs", ".jobs", "hls"} {
 		if err := os.MkdirAll(filepath.Join(cacheAbs, d), 0o750); err != nil {
 			return nil, err
 		}
@@ -61,6 +66,7 @@ func NewService(cfg config.Media, st *store.Store, fsys *files.FS, filesRoot, ca
 		runner:   NewRunner(cfg),
 		thumbSem: make(chan struct{}, 2), // up to 80 MP each, about 320 MB decoded
 		jobs:     map[string]*Job{},
+		hls:      map[string]*hlsSession{},
 	}, nil
 }
 
@@ -274,29 +280,7 @@ func (s *Service) runJob(j *Job, in *Input, fi fs.FileInfo, probe *Probe, spec v
 		}
 	}
 	cmd := s.runner.Command(ctx, "ffmpeg", in, jobDir, func(input string) []string {
-		args := ffmpegArgs(input)
-		if video != nil {
-			args = append(args, "-map", "0:"+strconv.Itoa(video.Index), "-c:v", "copy")
-			if video.Codec == "hevc" {
-				args = append(args, "-tag:v", "hvc1") // required by Safari
-			}
-		} else {
-			args = append(args, "-vn")
-		}
-		if spec.audio >= 0 {
-			args = append(args, "-map", "0:"+strconv.Itoa(spec.audio))
-			if spec.transcodeAudio {
-				ch := 2
-				for _, st := range probe.Streams {
-					if st.Index == spec.audio && st.Channels > 2 {
-						ch = min(st.Channels, 6)
-					}
-				}
-				args = append(args, "-c:a", "aac", "-ac", strconv.Itoa(ch), "-b:a", strconv.Itoa(96*ch)+"k")
-			} else {
-				args = append(args, "-c:a", "copy")
-			}
-		}
+		args := append(ffmpegArgs(input), streamArgs(probe, video, spec, 6)...)
 		return append(args, "-sn", "-dn", "-map_chapters", "-1", "-movflags", "+faststart",
 			"-f", "mp4", "-progress", "pipe:1", "-nostats", tmp)
 	})
@@ -335,6 +319,35 @@ func (s *Service) runJob(j *Job, in *Input, fi fs.FileInfo, probe *Probe, spec v
 	return err
 }
 
+// streamArgs maps the video stream (copied, or none) and the variant's audio
+// stream (copied, or transcoded to AAC with at most maxChannels channels).
+func streamArgs(probe *Probe, video *Stream, spec variantSpec, maxChannels int) []string {
+	var args []string
+	if video != nil {
+		args = append(args, "-map", "0:"+strconv.Itoa(video.Index), "-c:v", "copy")
+		if video.Codec == "hevc" {
+			args = append(args, "-tag:v", "hvc1") // required by Safari
+		}
+	} else {
+		args = append(args, "-vn")
+	}
+	if spec.audio >= 0 {
+		args = append(args, "-map", "0:"+strconv.Itoa(spec.audio))
+		if spec.transcodeAudio {
+			ch := 2
+			for _, st := range probe.Streams {
+				if st.Index == spec.audio && st.Channels > 2 {
+					ch = min(st.Channels, maxChannels)
+				}
+			}
+			args = append(args, "-c:a", "aac", "-ac", strconv.Itoa(ch), "-b:a", strconv.Itoa(96*ch)+"k")
+		} else {
+			args = append(args, "-c:a", "copy")
+		}
+	}
+	return args
+}
+
 // OpenVariant opens a cached variant for streaming.
 func (s *Service) OpenVariant(ctx context.Context, path, variant string) (*os.File, error) {
 	if _, err := parseVariant(variant); err != nil {
@@ -365,6 +378,7 @@ func (s *Service) OpenVariant(ctx context.Context, path, variant string) (*os.Fi
 // stale thumbnails and subtitles, and forgets finished job records.
 func (s *Service) Evict(ctx context.Context) {
 	s.evictStale()
+	s.evictHLS()
 	s.jobsMu.Lock()
 	for k, j := range s.jobs {
 		if !j.finished.IsZero() && time.Since(j.finished) > 10*time.Minute {

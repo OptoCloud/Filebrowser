@@ -23,7 +23,8 @@ Licensed under the [GNU AGPL v3](LICENSE).
 - Share links on a separate origin: expiry, password, download limits, revocation,
   upload-only "drop" links.
 - Thumbnails, image/audio/video/PDF/text previews, media pipeline (direct play,
-  cached remux or AAC transcode, WebVTT subtitles, "Open in VLC" signed URLs).
+  cached remux, live HLS with AAC audio for video whose audio the browser cannot
+  play, WebVTT subtitles, "Open in VLC" signed URLs).
 - Admin page: users, grants, quotas, sessions, invites, audit log.
 
 ## Access model

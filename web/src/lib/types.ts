@@ -161,7 +161,7 @@ export interface Subtitle {
 }
 
 export interface Plan {
-  mode: 'direct' | 'remux' | 'transcode' | 'external' | 'unsupported';
+  mode: 'direct' | 'remux' | 'transcode' | 'hls' | 'external' | 'unsupported';
   variant?: string;
   duration: number;
   video?: Stream;

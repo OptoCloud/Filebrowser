@@ -39,11 +39,22 @@ function supported(types: string[], el: HTMLMediaElement): boolean {
   return types.some((t) => el.canPlayType(t) !== '' || (MS?.isTypeSupported?.(t) ?? false));
 }
 
+// Live HLS (fragmented MP4) plays with hls.js over Media Source Extensions, or
+// natively where there is no MSE (iPhone Safari before ManagedMediaSource).
+function hlsSupported(el: HTMLMediaElement): boolean {
+  const w = window as unknown as { MediaSource?: unknown; ManagedMediaSource?: unknown };
+  return (
+    !!(w.MediaSource || w.ManagedMediaSource) ||
+    el.canPlayType('application/vnd.apple.mpegurl') !== ''
+  );
+}
+
 export function playbackCaps(): string {
   if (cached !== null) return cached;
   const el = document.createElement('video');
   const out: string[] = [];
   for (const [k, t] of Object.entries(containers)) if (supported(t, el)) out.push('c:' + k);
+  if (hlsSupported(el)) out.push('c:hls');
   for (const [k, t] of Object.entries(video)) if (supported(t, el)) out.push('v:' + k);
   for (const [k, t] of Object.entries(audio)) if (supported(t, el)) out.push('a:' + k);
   cached = out.join(',');

@@ -18,6 +18,7 @@
   let audioIdx = $state(-1);
   let externalURL = $state('');
   let externalErr = $state('');
+  let videoEl = $state<HTMLVideoElement | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
   // One load (info → prepare → polling) at a time; a new one supersedes it.
   const req = new LatestRequest();
@@ -48,6 +49,8 @@
       if (plan.mode === 'direct') {
         src = directURL;
         status = 'ready';
+      } else if (plan.mode === 'hls') {
+        status = 'ready'; // the effect below attaches the stream
       } else if (plan.mode === 'remux' || plan.mode === 'transcode') {
         if (res.job?.state === 'done') {
           src = streamURL(plan.variant!);
@@ -120,8 +123,11 @@
   async function openExternal() {
     externalErr = '';
     try {
+      // Live streams are for the browser; VLC plays the original file.
       const variant =
-        status === 'ready' && plan && plan.mode !== 'direct' ? plan.variant : undefined;
+        status === 'ready' && (plan?.mode === 'remux' || plan?.mode === 'transcode')
+          ? plan.variant
+          : undefined;
       const res = await post<{ url: string }>('/api/media/external-url', { path, variant });
       externalURL = res.url;
     } catch (err) {
@@ -135,6 +141,62 @@
       qs(s.sidecar ? { path, sidecar: s.sidecar } : { path, track: s.track })
     );
   }
+
+  // Live HLS (video copied, audio converted while playing): hls.js, loaded on
+  // demand, feeds the video element through Media Source Extensions; without
+  // MSE (older iPhones) the browser plays the playlist itself.
+  $effect(() => {
+    const el = videoEl;
+    const variant = plan?.mode === 'hls' ? plan.variant : undefined;
+    if (!el || status !== 'ready' || !variant) return;
+    const url = '/api/media/hls/playlist' + qs({ path, variant });
+    const w = window as unknown as { MediaSource?: unknown; ManagedMediaSource?: unknown };
+    if (!w.MediaSource && !w.ManagedMediaSource) {
+      el.src = url;
+      return;
+    }
+    let hls: import('hls.js').default | undefined;
+    let cancelled = false;
+    import('hls.js')
+      .then(({ default: Hls }) => {
+        if (cancelled) return;
+        // Segments are made on request, which can take a while (a job slot,
+        // a seek far ahead), and the playlist may need a keyframe scan.
+        const retry = { maxNumRetry: 3, retryDelayMs: 1000, maxRetryDelayMs: 8000 };
+        const slow = (ms: number) => ({
+          default: {
+            maxTimeToFirstByteMs: ms,
+            maxLoadTimeMs: ms * 2,
+            timeoutRetry: retry,
+            errorRetry: retry,
+          },
+        });
+        hls = new Hls({
+          enableWorker: false, // the CSP allows no blob: workers
+          manifestLoadPolicy: slow(300_000),
+          fragLoadPolicy: slow(60_000),
+        });
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (!data.fatal) return;
+          status = 'error';
+          message =
+            data.response?.code === 429
+              ? 'The server is busy converting other files. Try again shortly.'
+              : `Playback failed (${data.details}).`;
+        });
+        hls.loadSource(url);
+        hls.attachMedia(el);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        status = 'error';
+        message = errorMessage(err);
+      });
+    return () => {
+      cancelled = true;
+      hls?.destroy();
+    };
+  });
 
   $effect(() => {
     void path;
@@ -165,7 +227,7 @@
       <audio controls autoplay {src}></audio>
     {:else}
       <!-- svelte-ignore a11y_media_has_caption -->
-      <video controls autoplay playsinline {src}>
+      <video controls autoplay playsinline src={src || undefined} bind:this={videoEl}>
         {#each plan?.subtitles ?? [] as s, i (i)}
           <track
             kind="subtitles"

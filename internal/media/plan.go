@@ -68,7 +68,8 @@ var mp4Audio = map[string]bool{"aac": true, "mp3": true, "opus": true, "flac": t
 var mp4Video = map[string]bool{"h264": true, "hevc": true, "av1": true, "vp9": true}
 
 type Plan struct {
-	// Mode is direct, remux, transcode, external or unsupported.
+	// Mode is direct, remux, transcode (cached), hls (live audio transcode),
+	// external or unsupported.
 	Mode      string     `json:"mode"`
 	Variant   string     `json:"variant,omitempty"`
 	Duration  float64    `json:"duration"`
@@ -162,6 +163,12 @@ func Decide(p *Probe, name string, caps Caps, audioIdx int) Plan {
 	}
 	if !caps.Audio["aac"] {
 		plan.Mode, plan.Reason = "external", "browser cannot play AAC"
+		return plan
+	}
+	// Video with audio to convert plays while it converts, where the browser
+	// can play HLS (the frontend reports "c:hls").
+	if plan.Video != nil && caps.Containers["hls"] {
+		plan.Mode, plan.Variant = "hls", "aac-a"+aIdx
 		return plan
 	}
 	plan.Mode, plan.Variant = "transcode", "aac-a"+aIdx

@@ -62,6 +62,9 @@ func (s *Server) routes() {
 	s.handle("POST /api/media/prepare", s.handleMediaPrepare)
 	s.handle("GET /api/media/job", s.handleMediaJob)
 	s.handle("GET /api/media/stream", s.handleMediaStream)
+	s.handle("GET /api/media/hls/playlist", s.handleHLSPlaylist)
+	s.handle("GET /api/media/hls/init", s.handleHLSInit)
+	s.handle("GET /api/media/hls/segment", s.handleHLSSegment)
 	s.handle("GET /api/media/subtitle", s.handleMediaSubtitle)
 	s.handle("POST /api/media/external-url", s.handleExternalURL)
 
