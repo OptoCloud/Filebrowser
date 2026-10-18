@@ -7,7 +7,7 @@ toolchain go1.27.2
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/fxamacker/cbor/v2 v2.9.4
+	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/tus/tusd/v2 v2.10.1
