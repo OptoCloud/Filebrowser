@@ -55,7 +55,7 @@
       notice = `User ${nu.username} created.`;
       nu = { username: '', password: '', role: 'user', quotaGB: 0, mfaExempt: false };
       nuGrants = [];
-      loadUsers();
+      void loadUsers();
     } catch (x) {
       modalErr = errorMessage(x);
     }
@@ -88,7 +88,7 @@
       await put('/api/admin/users/' + u.id + '/grants', edGrants);
       editing = null;
       notice = `Saved ${u.username}.`;
-      loadUsers();
+      void loadUsers();
     } catch (x) {
       modalErr = errorMessage(x);
     }
@@ -104,7 +104,7 @@
     } catch (x) {
       err = errorMessage(x);
     }
-    loadUsers();
+    void loadUsers();
   }
 
   async function resetTOTP() {
@@ -117,7 +117,7 @@
     } catch (x) {
       err = errorMessage(x);
     }
-    loadUsers();
+    void loadUsers();
   }
 
   // Sessions
@@ -170,7 +170,7 @@
         mfa_exempt: inv.role !== 'admin' && inv.mfaExempt,
       });
       inviteURL = r.url;
-      loadInvites();
+      void loadInvites();
     } catch (x) {
       modalErr = errorMessage(x);
     }
@@ -181,7 +181,7 @@
     } catch (x) {
       err = errorMessage(x);
     }
-    loadInvites();
+    void loadInvites();
   }
 
   // Audit
@@ -207,10 +207,10 @@
     const t = tab;
     untrack(() => {
       err = '';
-      if (t === 'users') loadUsers();
-      else if (t === 'sessions') loadSessions();
-      else if (t === 'invites') loadInvites();
-      else loadAudit();
+      if (t === 'users') void loadUsers();
+      else if (t === 'sessions') void loadSessions();
+      else if (t === 'invites') void loadInvites();
+      else void loadAudit();
     });
   });
 
@@ -502,7 +502,7 @@
 {/if}
 
 {#if editing}
-  <Modal title={`Edit ${editing.username}`} wide onclose={() => (editing = null)}>
+  <Modal title="Edit {editing.username}" wide onclose={() => (editing = null)}>
     <form id="edit-user" onsubmit={saveEdit}>
       <div class="two">
         <label class="field"

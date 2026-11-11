@@ -17,7 +17,7 @@
   function signOut() {
     appUploader.cancelAll();
     appUploader.clearFinished();
-    logout();
+    void logout();
   }
 
   // Closing the tab would abort running uploads (only ever started on the app origin).

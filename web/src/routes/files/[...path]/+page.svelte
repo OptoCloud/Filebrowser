@@ -93,7 +93,7 @@
       results = null;
       query = '';
       previewPath = null;
-      load(p);
+      void load(p);
     });
     // Leaving the folder drops its pending listing and search.
     return () => {
@@ -560,7 +560,7 @@
 
 {#if moveOpen}
   <FolderPicker
-    title={`Move ${selection.length} item${selection.length === 1 ? '' : 's'} to…`}
+    title="Move {selection.length} item{selection.length === 1 ? '' : 's'} to…"
     start={path}
     exclude={selection.filter((e) => e.is_dir).map((e) => e.path)}
     onpick={moveTo}

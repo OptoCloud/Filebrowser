@@ -90,7 +90,7 @@
     } catch (x) {
       revokeErr = errorMessage(x);
     }
-    invalidate('app:sessions');
+    void invalidate('app:sessions');
   }
 
   async function unlink(issuer: string, subject: string) {

@@ -200,7 +200,7 @@
 
   $effect(() => {
     void path;
-    untrack(() => load(-1));
+    void untrack(() => load(-1));
     return () => {
       req.abort();
       clearTimeout(timer);

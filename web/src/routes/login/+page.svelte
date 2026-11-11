@@ -176,7 +176,7 @@
 
   function useKey() {
     keyTried = true;
-    ceremony(
+    void ceremony(
       '/api/auth/login/webauthn/begin',
       { token: mfaToken },
       '/api/auth/login/webauthn/finish'
@@ -184,7 +184,7 @@
   }
 
   function usePasskey() {
-    ceremony('/api/auth/passkey/begin', {}, '/api/auth/passkey/finish');
+    void ceremony('/api/auth/passkey/begin', {}, '/api/auth/passkey/finish');
   }
 </script>
 

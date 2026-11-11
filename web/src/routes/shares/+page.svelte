@@ -35,7 +35,7 @@
 
   $effect(() => {
     void all;
-    load();
+    void load();
     return () => req.abort();
   });
 
@@ -48,7 +48,7 @@
     } catch (e) {
       err = errorMessage(e);
     }
-    load();
+    void load();
   }
 
   function status(s: Share): string {

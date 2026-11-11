@@ -1,6 +1,7 @@
 import { includeIgnoreFile } from '@eslint/compat';
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
+import compat from 'eslint-plugin-compat';
 import svelte from 'eslint-plugin-svelte';
 import { defineConfig } from 'eslint/config';
 import globals from 'globals';
@@ -16,6 +17,7 @@ export default defineConfig(
   ...svelte.configs.recommended,
   prettier,
   ...svelte.configs.prettier,
+  compat.configs['flat/recommended'],
   {
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
@@ -27,6 +29,11 @@ export default defineConfig(
       // typescript-eslint strongly recommend that you do not use the no-undef lint rule on TypeScript projects.
       // see: https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-from-the-no-undef-rule-about-global-variables-not-being-defined-even-though-there-are-no-typescript-errors
       'no-undef': 'off',
+      'no-useless-assignment': 'warn',
+      'svelte/prefer-attribute-interpolation': 'error',
+      // Fire-and-forget calls must say so (`void load()`): an un-awaited promise
+      // whose rejection nobody handles is an unhandled rejection.
+      '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },

@@ -72,7 +72,7 @@
   }
 
   $effect(() => {
-    untrack(loadInfo);
+    void untrack(loadInfo);
     // Leaving the share stops its uploads; they could not be shown anywhere else.
     return () => {
       listReq.abort();
@@ -84,7 +84,8 @@
 
   $effect(() => {
     const p = sub;
-    if (info && unlocked && info.kind === 'download' && info.is_dir) untrack(() => loadList(p));
+    if (info && unlocked && info.kind === 'download' && info.is_dir)
+      void untrack(() => loadList(p));
   });
 
   async function unlock(e: Event) {

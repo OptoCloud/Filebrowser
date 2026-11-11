@@ -36,13 +36,13 @@
       err = fallbackErr;
     } catch (e) {
       if (signal.aborted) return;
-      if (p !== '') open('', errorMessage(e));
+      if (p !== '') void open('', errorMessage(e));
       else err = errorMessage(e);
     }
   }
 
   $effect(() => {
-    open(start);
+    void open(start);
     return () => req.abort();
   });
 

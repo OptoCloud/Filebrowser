@@ -43,7 +43,7 @@
   }
 </script>
 
-<Modal title={`Share "${entry.name}"`} {onclose}>
+<Modal title="Share “{entry.name}”" {onclose}>
   {#if result}
     <p>
       Anyone with this link can {result.share.kind === 'upload'

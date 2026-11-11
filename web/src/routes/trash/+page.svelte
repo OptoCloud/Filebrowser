@@ -33,7 +33,7 @@
     } catch (e) {
       actionErr = errorMessage(e);
     }
-    reload();
+    void reload();
   }
 
   async function purge() {
@@ -47,7 +47,7 @@
     } catch (e) {
       actionErr = errorMessage(e);
     }
-    reload();
+    void reload();
   }
 </script>
 

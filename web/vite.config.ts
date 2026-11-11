@@ -9,6 +9,8 @@ export default defineConfig({
     // SvelteKit 3 takes its configuration here (svelte.config.js is no longer read).
     sveltekit({
       preprocess: vitePreprocess(),
+      // Every component uses runes; reject legacy syntax instead of silently compiling it.
+      compilerOptions: { runes: true },
       // Single-page app embedded into the Go binary; index.html is the fallback for every route.
       adapter: adapter({ pages: 'build', assets: 'build', fallback: 'index.html', strict: true }),
       // Absolute asset URLs: the fallback page is served at arbitrary depths.
