@@ -139,6 +139,14 @@ func (s *Server) downloadShare(w http.ResponseWriter, r *http.Request) (*shares.
 		httpx.Error(w, http.StatusNotFound, "not found")
 		return nil, "", false
 	}
+	// A used-up link shows a new browser nothing more of the files (names,
+	// thumbnails); browsers that used a download keep access, so seeking in a
+	// video or listing again still works. Info still answers, so the page can
+	// say why.
+	if sh := res.Share; sh.MaxDownloads > 0 && sh.DownloadCount >= sh.MaxDownloads && !s.shares.Counted(r, sh) {
+		httpx.ErrorCode(w, http.StatusGone, "downloads_used_up", "this link has no downloads left")
+		return nil, "", false
+	}
 	p, err := res.Sub(r.URL.Query().Get("path"))
 	if err != nil {
 		httpx.FileError(w, r, err)

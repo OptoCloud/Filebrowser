@@ -507,7 +507,16 @@ func TestSharesEndToEnd(t *testing.T) {
 		if rec := other.do("GET", "/s/"+token+"/file?path=cover.jpg", nil); rec.Code != want {
 			t.Fatalf("browser %d: status %d, want %d", i+2, rec.Code, want)
 		}
+		if want == http.StatusGone {
+			// Used up: a new browser sees no names or thumbnails either.
+			expect(t, other.do("GET", "/s/"+token+"/api/list", nil), http.StatusGone)
+			expect(t, other.do("GET", "/s/"+token+"/thumb?path=cover.jpg", nil), http.StatusGone)
+			expect(t, other.do("GET", "/s/"+token+"/api/info", nil), 200)
+		}
 	}
+	// A browser that used a download keeps access (listing again, seeking).
+	expect(t, s.do("GET", "/s/"+token+"/api/list", nil), 200)
+	expect(t, s.do("GET", "/s/"+token+"/file?path=song.flac", nil), 200)
 
 	// Revocation.
 	shares := decode[[]map[string]any](t, c.do("GET", "/api/shares", nil))
