@@ -32,9 +32,11 @@ const (
 	// ShareHeader carries the share token on share-origin upload requests.
 	ShareHeader = "X-Share-Token"
 
-	metaOwner = "fb_owner"
-	metaDir   = "fb_dir"
-	metaName  = "fb_name"
+	// Where uploads started by older versions keep their server-side facts
+	// (MetaData); new ones use Storage (see storageOwner).
+	legacyOwner = "fb_owner"
+	legacyDir   = "fb_dir"
+	legacyName  = "fb_name"
 )
 
 type Uploads struct {
@@ -206,8 +208,8 @@ func (u *Uploads) changes(uploadID, owner, dir, name string) tushandler.FileInfo
 	stage, _ := u.files.FS.ReservedDir(dir, "uploads")
 	return tushandler.FileInfoChanges{
 		ID:       uploadID,
-		MetaData: tushandler.MetaData{metaOwner: owner, metaDir: dir, metaName: name, "filename": name},
-		Storage:  map[string]string{storageDir: stage},
+		MetaData: tushandler.MetaData{"filename": name},
+		Storage:  map[string]string{storageDir: stage, storageOwner: owner, storageDest: dir, storageName: name},
 	}
 }
 
@@ -230,7 +232,7 @@ func (u *Uploads) shareFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 // place moves a completed upload to its destination, re-checking permissions.
 // within (if not "") confines the destination for share uploads.
 func (u *Uploads) place(ev tushandler.HookEvent, a *files.Access, within string) (string, error) {
-	dir, name := ev.Upload.MetaData[metaDir], ev.Upload.MetaData[metaName]
+	dir, name := fact(ev.Upload, storageDest, legacyDir), fact(ev.Upload, storageName, legacyName)
 	dir, err := u.files.FS.Authorize(a, dir, files.PermWrite)
 	if err != nil || (within != "" && !files.Within(dir, within)) {
 		return "", reject(http.StatusForbidden, "forbidden")
@@ -248,6 +250,15 @@ func (u *Uploads) place(ev tushandler.HookEvent, a *files.Access, within string)
 	}
 	_ = fsys.Root().Remove(infoPath(ev.Upload.ID))
 	return final, nil
+}
+
+// fact reads a server-side upload fact. Uploads started before these moved
+// from MetaData to Storage still carry them under the legacy MetaData key.
+func fact(info tushandler.FileInfo, key, legacy string) string {
+	if v, ok := info.Storage[key]; ok {
+		return v
+	}
+	return info.MetaData[legacy]
 }
 
 // guard ensures that only the creator of an upload can resume or cancel it.
@@ -270,7 +281,7 @@ func (u *Uploads) guard(next http.Handler, owner func(*http.Request) string) htt
 				return
 			}
 			info, err := up.GetInfo(r.Context())
-			if err != nil || info.MetaData[metaOwner] != want {
+			if err != nil || fact(info, storageOwner, legacyOwner) != want {
 				httpx.Error(w, http.StatusNotFound, "not found")
 				return
 			}

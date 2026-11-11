@@ -32,6 +32,15 @@ type rootStore struct {
 // path relative to files_root).
 const storageDir = "dir"
 
+// Server-side upload facts, also in FileInfo.Storage: unlike MetaData, tusd
+// never sends Storage to the client (a HEAD returns all of MetaData, and a
+// drop-link uploader must not learn the owner or the real folder).
+const (
+	storageOwner = "owner" // "u:<user id>" or "s:<share id>"
+	storageDest  = "dest"  // destination folder, relative to files_root
+	storageName  = "name"  // file name within it
+)
+
 func (s rootStore) UseIn(c *tushandler.StoreComposer) {
 	c.UseCore(s)
 	c.UseTerminater(s)
@@ -48,7 +57,13 @@ func (s rootStore) NewUpload(_ context.Context, info tushandler.FileInfo) (tusha
 	if !stagingDir(dir) {
 		return nil, errors.New("uploads: invalid staging directory")
 	}
-	info.Storage = map[string]string{"Type": "rootstore", storageDir: dir}
+	st := map[string]string{"Type": "rootstore", storageDir: dir}
+	for _, k := range []string{storageOwner, storageDest, storageName} {
+		if v, ok := info.Storage[k]; ok {
+			st[k] = v
+		}
+	}
+	info.Storage = st
 	u := &rootUpload{root: s.fs.Root(), info: info}
 	f, err := u.root.OpenFile(u.binPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
 	if err != nil {

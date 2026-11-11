@@ -624,6 +624,20 @@ func TestDropShareUpload(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(h.root, "gina", "inbox", "dropped.txt")); string(got) != "dropped" {
 		t.Fatalf("dropped content = %q", got)
 	}
+	// A HEAD (resuming) shows the uploader nothing of the owner or the folder.
+	s.headers["Tus-Resumable"] = "1.0.0"
+	s.headers["Upload-Length"] = "5"
+	s.headers["Upload-Metadata"] = tusMeta("filename", "pending.txt", "dir", "")
+	rec = s.do("POST", "/_upload/", []byte{})
+	delete(s.headers, "Upload-Length")
+	delete(s.headers, "Upload-Metadata")
+	expect(t, rec, 201)
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	rec = s.do("HEAD", loc.Path, nil)
+	expect(t, rec, 200)
+	if md := rec.Header().Get("Upload-Metadata"); md == "" || strings.Contains(md, "fb_") {
+		t.Fatalf("Upload-Metadata = %q", md)
+	}
 	rec, _ = s.tusUpload("/_upload/", "../..", "escape.txt", "x")
 	if rec.Code < 400 {
 		t.Fatalf("drop upload escaped: %d", rec.Code)
