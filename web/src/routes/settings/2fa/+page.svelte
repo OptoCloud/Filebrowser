@@ -186,7 +186,7 @@
             height="220"
           />{/if}
         <p class="small muted">Or enter this key manually:</p>
-        <p class="mono secret">{secret}</p>
+        <p class="mono secret">{secret.match(/.{1,4}/g)?.join(' ')}</p>
         <p class="small">
           <a href={otpURL} rel="external">Open in an authenticator app on this device</a>
         </p>

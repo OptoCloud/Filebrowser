@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorMessage, post } from '#lib/api.js';
+  import { copyText, errorMessage, post } from '#lib/api.js';
   import { formatDate } from '#lib/format.js';
   import type { Entry, Share } from '#lib/types.js';
   import CopyField from './CopyField.svelte';
@@ -10,10 +10,12 @@
   let kind = $state<'download' | 'upload'>('download');
   let expiresIn = $state(7 * 86400);
   let password = $state('');
-  let maxDownloads = $state(0);
+  let maxDownloads = $state<number | null>(null);
   let busy = $state(false);
   let err = $state('');
   let result = $state<{ share: Share; url: string } | null>(null);
+  // The link cannot be shown again, so it goes to the clipboard right away.
+  let copied = $state(false);
 
   const expiries = [
     { label: '1 hour', value: 3600 },
@@ -35,6 +37,7 @@
         password,
         max_downloads: kind === 'download' ? maxDownloads || 0 : 0,
       });
+      copied = await copyText(result.url);
     } catch (x) {
       err = errorMessage(x);
     } finally {
@@ -52,9 +55,13 @@
       {formatDate(result.share.expires_at)}.
     </p>
     <CopyField value={result.url} />
-    <p class="warn small">
-      Copy the link now. For security it is stored hashed and cannot be shown again.
-    </p>
+    {#if copied}
+      <p class="notice small">Link copied to the clipboard. It cannot be shown again.</p>
+    {:else}
+      <p class="warn small">
+        Copy the link now. For security it is stored hashed and cannot be shown again.
+      </p>
+    {/if}
   {:else}
     <form id="share-form" onsubmit={create}>
       {#if entry.is_dir}
@@ -79,15 +86,15 @@
           type="password"
           bind:value={password}
           autocomplete="new-password"
-          minlength="8"
+          minlength="10"
           maxlength="256"
-          placeholder="at least 8 characters"
+          placeholder="at least 10 characters"
         />
       </label>
       {#if kind === 'download'}
         <label class="field">
-          Maximum downloads (0 = unlimited)
-          <input type="number" min="0" bind:value={maxDownloads} />
+          Maximum downloads
+          <input type="number" min="1" placeholder="Unlimited" bind:value={maxDownloads} />
         </label>
       {/if}
       {#if err}<div class="error">{err}</div>{/if}

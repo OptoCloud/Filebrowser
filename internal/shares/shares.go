@@ -25,9 +25,10 @@ var (
 	ErrLimit   = errors.New("download limit reached")
 )
 
-// MinPasswordLen is the shortest share password accepted. Share links are
-// public, so their passwords face guessing from anywhere.
-const MinPasswordLen = 8
+// MinPasswordLen is the shortest share password accepted, the same as for
+// accounts. Share links are public, so their passwords face guessing from
+// anywhere.
+const MinPasswordLen = 10
 
 // InputError is a mistake in a CreateRequest; its message is shown to the user.
 type InputError string

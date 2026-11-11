@@ -306,9 +306,7 @@
         <span class="muted">/</span>
         <a href={filesHref(c.path)}>{c.name}</a>
       {/each}
-      {#if listing && listing.permission !== 'write'}
-        <span class="badge">{listing.permission === 'read' ? 'read-only' : 'browse'}</span>
-      {/if}
+      {#if listing?.permission === 'read'}<span class="badge">read-only</span>{/if}
     </nav>
     <form class="search" onsubmit={runSearch}>
       <input type="search" placeholder="Search names…" bind:value={query} aria-label="Search" />
@@ -581,7 +579,7 @@
   >
     <p>
       {selection.length === 1 ? `"${selection[0].name}"` : `${selection.length} items`} will be moved
-      to the trash. You can restore them from the Trash page.
+      to the trash. You can restore {selection.length === 1 ? 'it' : 'them'} from the Trash page.
     </p>
   </ConfirmDialog>
 {/if}

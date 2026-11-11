@@ -20,10 +20,21 @@
   // Users
   let users = $state<AdminUser[]>([]);
   let createOpen = $state(false);
-  let nu = $state({ username: '', password: '', role: 'user', quotaGB: 0, mfaExempt: false });
+  let nu = $state({
+    username: '',
+    password: '',
+    role: 'user',
+    quotaGB: null as number | null,
+    mfaExempt: false,
+  });
   let nuGrants = $state<Grant[]>([]);
   let editing = $state<AdminUser | null>(null);
-  let ed = $state({ role: 'user', quotaGB: 0, disabled: false, mfaExempt: false });
+  let ed = $state({
+    role: 'user',
+    quotaGB: null as number | null,
+    disabled: false,
+    mfaExempt: false,
+  });
   let edGrants = $state<Grant[]>([]);
   let confirmDelete = $state<AdminUser | null>(null);
   let confirmReset = $state<AdminUser | null>(null);
@@ -53,7 +64,7 @@
       });
       createOpen = false;
       notice = `User ${nu.username} created.`;
-      nu = { username: '', password: '', role: 'user', quotaGB: 0, mfaExempt: false };
+      nu = { username: '', password: '', role: 'user', quotaGB: null, mfaExempt: false };
       nuGrants = [];
       void loadUsers();
     } catch (x) {
@@ -66,7 +77,7 @@
     editing = u;
     ed = {
       role: u.role,
-      quotaGB: u.quota_bytes / GB,
+      quotaGB: u.quota_bytes ? u.quota_bytes / GB : null,
       disabled: u.disabled,
       mfaExempt: u.mfa_exempt,
     };
@@ -241,7 +252,7 @@
         />
         <select bind:value={g.permission}>
           <option value="read">read</option>
-          <option value="write">read-write</option>
+          <option value="write">write</option>
         </select>
         <button type="button" class="small" onclick={() => grants.splice(i, 1)}>Remove</button>
       </div>
@@ -320,7 +331,7 @@
               <td class="hide-mobile small">{u.quota_bytes ? formatSize(u.quota_bytes) : '∞'}</td>
               <td class="actions">
                 <button class="small" onclick={() => startEdit(u)}>Edit</button>
-                {#if u.totp_enabled || u.webauthn_count}<button
+                {#if (u.totp_enabled || u.webauthn_count) && u.id !== myId}<button
                     class="small"
                     onclick={() => (confirmReset = u)}>Reset two-factor</button
                   >{/if}
@@ -473,7 +484,8 @@
           >
         </label>
         <label class="field"
-          >Quota in GB (0 = none)<input
+          >Quota in GB<input
+            placeholder="No limit"
             type="number"
             min="0"
             step="any"
@@ -512,7 +524,8 @@
           >
         </label>
         <label class="field"
-          >Quota in GB (0 = none)<input
+          >Quota in GB<input
+            placeholder="No limit"
             type="number"
             min="0"
             step="any"
@@ -567,7 +580,7 @@
               placeholder="path (empty = everything)"
             />
             <select bind:value={inv.grantPerm}
-              ><option value="read">read</option><option value="write">read-write</option></select
+              ><option value="read">read</option><option value="write">write</option></select
             >
           </div>
         {/if}

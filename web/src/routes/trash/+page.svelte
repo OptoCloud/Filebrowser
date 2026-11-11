@@ -141,8 +141,11 @@
     onclose={() => (confirm = null)}
   >
     <p>
-      {confirm === 'all' ? 'Everything in the trash' : `${selected.size} item(s)`} will be deleted permanently.
-      This cannot be undone.
+      {confirm === 'all'
+        ? 'Everything in the trash'
+        : selected.size === 1
+          ? '1 item'
+          : `${selected.size} items`} will be deleted permanently. This cannot be undone.
     </p>
   </ConfirmDialog>
 {/if}

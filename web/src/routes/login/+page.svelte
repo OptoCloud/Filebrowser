@@ -5,6 +5,7 @@
   import { ApiError, errorMessage, post } from '#lib/api.js';
   import { LatestRequest } from '#lib/latest.js';
   import { safeNext } from '#lib/nav.js';
+  import Icon from '#lib/components/Icon.svelte';
   import {
     getCredential,
     webauthnSupported,
@@ -192,6 +193,7 @@
 
 <div class="wrap">
   <div class="card login">
+    <p class="brand"><Icon name="folder" size={22} /> filebrowser</p>
     <h1>Log in</h1>
     {#if err}<div class="error">{err}</div>{/if}
     {#if mfaToken}
@@ -286,6 +288,13 @@
     width: 100%;
     justify-content: center;
     margin-top: 0.4rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.5rem;
+    font-weight: 700;
   }
   .or {
     text-align: center;

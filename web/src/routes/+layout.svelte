@@ -35,7 +35,7 @@
   {@render children()}
 {:else}
   <nav class="top">
-    <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> Files</a>
+    <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> filebrowser</a>
     <button class="icon menu-btn" onclick={() => (menuOpen = !menuOpen)} aria-label="Menu"
       ><Icon name="menu" /></button
     >
