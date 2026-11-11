@@ -126,10 +126,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	// Hard backoff per IP and per IP+account. The account-wide limit is soft
 	// (short cap) so that failures from elsewhere cannot lock the owner out.
-	ipKey := "ip:" + httpx.LimitKey(ctx)
-	pairKey := "ipuser:" + httpx.LimitKey(ctx) + "|" + strings.ToLower(req.Username)
-	userKey := "user:" + strings.ToLower(req.Username)
-	if d := max(s.loginBackoff.Wait(ipKey, now), s.loginBackoff.Wait(pairKey, now), s.accountBackoff.Wait(userKey, now)); d > 0 {
+	ip := s.loginBackoff.Slot("ip:" + httpx.LimitKey(ctx))
+	pair := s.loginBackoff.Slot("ipuser:" + httpx.LimitKey(ctx) + "|" + strings.ToLower(req.Username))
+	account := s.accountBackoff.Slot("user:" + strings.ToLower(req.Username))
+	if d := auth.Reserve(now, ip, pair, account); d > 0 {
 		retryAfter(w, d)
 		return
 	}
@@ -145,13 +145,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	case err == nil || errors.Is(err, store.ErrNotFound):
 		auth.VerifyDummy(req.Password) // equalize timing for unknown/disabled users
 	default:
+		ip.Refund()
+		pair.Refund()
+		account.Refund()
 		httpx.InternalError(w, r, err)
 		return
 	}
 	if !ok {
-		s.loginBackoff.Fail(ipKey, now)
-		s.loginBackoff.Fail(pairKey, now)
-		n := s.accountBackoff.Fail(userKey, now)
+		n := account.Failures()
 		s.audit.LogUser(ctx, nil, audit.LoginFailed, req.Username, nil)
 		if n%10 == 0 {
 			slog.WarnContext(ctx, "login failure burst", "username", req.Username, "failures", n, "ip", httpx.IP(ctx))
@@ -160,7 +161,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
-	s.loginBackoff.Reset(pairKey)
+	ip.Refund()
+	account.Refund()
+	pair.Reset()
 	totp, keys, err := s.secondFactors(ctx, user)
 	if err != nil {
 		httpx.InternalError(w, r, err)
@@ -230,24 +233,24 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
 		return
 	}
-	key := userKey("totp", pl.userID)
-	if d := s.totpBackoff.Wait(key, time.Now()); d > 0 {
+	guess := s.totpBackoff.Slot(userKey("totp", pl.userID))
+	if d := auth.Reserve(time.Now(), guess); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	user, err := s.store.UserByID(ctx, pl.userID)
 	if err != nil || user.Disabled {
+		guess.Refund()
 		s.pending.done(req.Token)
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
 		return
 	}
 	if !s.verifyTOTP(r, user, req.Code) {
-		s.totpBackoff.Fail(key, time.Now())
 		s.audit.LogUser(ctx, &user.ID, audit.TOTPFailed, user.Username, nil)
 		httpx.Error(w, http.StatusUnauthorized, "invalid code")
 		return
 	}
-	s.totpBackoff.Reset(key)
+	guess.Reset()
 	s.pending.done(req.Token)
 	if !s.startSession(w, r, user.ID, pl.method, true) {
 		return
@@ -345,11 +348,6 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "two-factor authentication is already enabled")
 		return
 	}
-	key := userKey("totp", id.User.ID)
-	if d := s.totpBackoff.Wait(key, time.Now()); d > 0 {
-		retryAfter(w, d)
-		return
-	}
 	if len(id.User.TOTPPending) == 0 {
 		httpx.Error(w, http.StatusBadRequest, "start setup first")
 		return
@@ -359,9 +357,13 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "start setup first")
 		return
 	}
+	guess := s.totpBackoff.Slot(userKey("totp", id.User.ID))
+	if d := auth.Reserve(time.Now(), guess); d > 0 {
+		retryAfter(w, d)
+		return
+	}
 	step := auth.CheckTOTP(secret, req.Code, time.Now())
 	if step == 0 {
-		s.totpBackoff.Fail(key, time.Now())
 		httpx.Error(w, http.StatusBadRequest, "invalid code")
 		return
 	}
@@ -402,22 +404,22 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same limits as password change and TOTP entry: a session alone must not
 	// allow unthrottled guessing of the password or the code.
-	pwKey, totpKey := userKey("pw", id.User.ID), userKey("totp", id.User.ID)
-	if d := max(s.loginBackoff.Wait(pwKey, time.Now()), s.totpBackoff.Wait(totpKey, time.Now())); d > 0 {
+	pw, code := s.loginBackoff.Slot(userKey("pw", id.User.ID)), s.totpBackoff.Slot(userKey("totp", id.User.ID))
+	if d := auth.Reserve(time.Now(), pw, code); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	if id.User.PasswordHash != "" && !auth.VerifyPassword(id.User.PasswordHash, req.Password) {
-		s.loginBackoff.Fail(pwKey, time.Now())
+		code.Refund() // the code was not tried
 		httpx.Error(w, http.StatusUnauthorized, "invalid password or code")
 		return
 	}
+	pw.Refund()
 	if !s.verifyTOTP(r, id.User, req.Code) {
-		s.totpBackoff.Fail(totpKey, time.Now())
 		httpx.Error(w, http.StatusUnauthorized, "invalid password or code")
 		return
 	}
-	s.totpBackoff.Reset(totpKey)
+	code.Reset()
 	if err := s.store.DisableTOTP(ctx, id.User.ID); err != nil {
 		httpx.InternalError(w, r, err)
 		return
@@ -437,13 +439,12 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	id := httpx.IdentityFrom(ctx)
-	key := userKey("pw", id.User.ID)
-	if d := s.loginBackoff.Wait(key, time.Now()); d > 0 {
+	guess := s.loginBackoff.Slot(userKey("pw", id.User.ID))
+	if d := auth.Reserve(time.Now(), guess); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	if id.User.PasswordHash != "" && !auth.VerifyPassword(id.User.PasswordHash, req.Current) {
-		s.loginBackoff.Fail(key, time.Now())
 		httpx.Error(w, http.StatusUnauthorized, "current password is wrong")
 		return
 	}
@@ -453,15 +454,16 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case id.User.TOTPEnabled():
 			if !s.verifyTOTP(r, id.User, req.Code) {
-				s.loginBackoff.Fail(key, time.Now())
 				httpx.Error(w, http.StatusUnauthorized, "invalid authenticator code")
 				return
 			}
 		case time.Since(id.Session.CreatedAt) > 10*time.Minute:
+			guess.Refund() // nothing was guessed
 			httpx.ErrorCode(w, http.StatusUnauthorized, "reauth_required", "log in again to set a password")
 			return
 		}
 	}
+	guess.Refund()
 	if err := auth.ValidatePassword(req.New); err != nil {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 		return

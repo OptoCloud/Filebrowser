@@ -133,25 +133,26 @@ func (s *Server) handleLoginWebAuthnFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// One budget for all second-factor guesses, whichever method.
-	key := userKey("totp", pl.userID)
-	if d := s.totpBackoff.Wait(key, time.Now()); d > 0 {
+	guess := s.totpBackoff.Slot(userKey("totp", pl.userID))
+	if d := auth.Reserve(time.Now(), guess); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	user, err := s.store.UserByID(ctx, pl.userID)
 	if err != nil || user.Disabled {
+		guess.Refund()
 		s.pending.done(c.Pending)
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
 		return
 	}
 	wu, err := s.webauthnUser(ctx, user)
 	if err != nil {
+		guess.Refund()
 		httpx.InternalError(w, r, err)
 		return
 	}
 	cred, err := s.webauthn.ValidateLogin(wu, c, req.Credential)
 	if err != nil {
-		s.totpBackoff.Fail(key, time.Now())
 		s.audit.LogUser(ctx, &user.ID, audit.WebAuthnFailed, user.Username, map[string]any{"error": err.Error()})
 		httpx.Error(w, http.StatusUnauthorized, "security key not accepted")
 		return
@@ -160,7 +161,7 @@ func (s *Server) handleLoginWebAuthnFinish(w http.ResponseWriter, r *http.Reques
 		httpx.InternalError(w, r, err)
 		return
 	}
-	s.totpBackoff.Reset(key)
+	guess.Reset()
 	s.pending.done(c.Pending)
 	if s.startSession(w, r, user.ID, pl.method, true) {
 		s.audit.LogUser(ctx, &user.ID, audit.LoginOK, user.Username, map[string]any{"method": pl.method, "webauthn": true})
@@ -192,13 +193,14 @@ func (s *Server) handlePasskeyFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	ipKey := "ip:" + httpx.LimitKey(ctx)
-	if d := s.loginBackoff.Wait(ipKey, time.Now()); d > 0 {
+	ip := s.loginBackoff.Slot("ip:" + httpx.LimitKey(ctx))
+	if d := auth.Reserve(time.Now(), ip); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	c, err := s.webauthn.Take(req.Ceremony, auth.CeremonyPasskey)
 	if err != nil {
+		ip.Refund()
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
 		return
 	}
@@ -215,11 +217,11 @@ func (s *Server) handlePasskeyFinish(w http.ResponseWriter, r *http.Request) {
 		return s.webauthnUser(ctx, u)
 	})
 	if err != nil || wu == nil || user == nil {
-		s.loginBackoff.Fail(ipKey, time.Now())
 		s.audit.LogUser(ctx, nil, audit.WebAuthnFailed, "", map[string]any{"passkey": true, "error": errString(err)})
 		httpx.Error(w, http.StatusUnauthorized, "passkey not accepted")
 		return
 	}
+	ip.Refund()
 	if err := s.saveCredentialUse(ctx, cred); err != nil {
 		httpx.InternalError(w, r, err)
 		return

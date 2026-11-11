@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"filebrowser/internal/audit"
+	"filebrowser/internal/auth"
 	"filebrowser/internal/files"
 	"filebrowser/internal/httpx"
 	"filebrowser/internal/shares"
@@ -191,18 +192,19 @@ func (s *Server) handleShareUnlock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Per client and per share: the share limit stops guessing spread over
 	// many addresses, with a short cap so it cannot lock the link out for long.
-	key, shareKey := "share:"+httpx.LimitKey(ctx), userKey("share", res.Share.ID)
-	if d := max(s.loginBackoff.Wait(key, time.Now()), s.shareBackoff.Wait(shareKey, time.Now())); d > 0 {
+	client := s.loginBackoff.Slot("share:" + httpx.LimitKey(ctx))
+	share := s.shareBackoff.Slot(userKey("share", res.Share.ID))
+	if d := auth.Reserve(time.Now(), client, share); d > 0 {
 		retryAfter(w, d)
 		return
 	}
 	if !s.shares.Unlock(w, res.Share, req.Password) {
-		s.loginBackoff.Fail(key, time.Now())
-		s.shareBackoff.Fail(shareKey, time.Now())
 		s.audit.LogUser(ctx, nil, audit.ShareUnlockFail, res.Share.Path, map[string]any{"share_id": res.Share.ID})
 		httpx.Error(w, http.StatusUnauthorized, "wrong password")
 		return
 	}
+	client.Refund()
+	share.Refund()
 	httpx.OK(w)
 }
 

@@ -44,6 +44,10 @@ func (b *Backoff) Wait(key string, now time.Time) time.Duration {
 func (b *Backoff) Fail(key string, now time.Time) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.fail(key, now)
+}
+
+func (b *Backoff) fail(key string, now time.Time) int {
 	b.gc(now)
 	e := b.entries[key]
 	if e == nil || now.Sub(e.last) > b.Forget {
@@ -52,15 +56,80 @@ func (b *Backoff) Fail(key string, now time.Time) int {
 	}
 	e.fails++
 	e.last = now
-	if over := e.fails - b.Free; over > 0 {
-		d := b.Base << min(over-1, 30)
-		if d > b.Max || d <= 0 {
-			d = b.Max
-		}
-		e.until = now.Add(d)
-	}
+	e.until = b.until(e)
 	return e.fails
 }
+
+// until is when the entry's wait ends (the zero time while within the free attempts).
+func (b *Backoff) until(e *backoffEntry) time.Time {
+	over := e.fails - b.Free
+	if over <= 0 {
+		return time.Time{}
+	}
+	d := b.Base << min(over-1, 30)
+	if d > b.Max || d <= 0 {
+		d = b.Max
+	}
+	return e.last.Add(d)
+}
+
+// Slot is one key of one Backoff, for Reserve.
+type Slot struct {
+	b   *Backoff
+	key string
+}
+
+func (b *Backoff) Slot(key string) Slot { return Slot{b, key} }
+
+// reserveMu makes Reserve's check-and-count atomic across Backoffs.
+var reserveMu sync.Mutex
+
+// Reserve is the way to guard a guess (password, code, share password). If
+// any slot must wait it returns the longest wait and records nothing.
+// Otherwise it counts the attempt as a failure on every slot before the
+// guess is checked, so concurrent requests cannot all pass the check while
+// the first one is still hashing; Refund takes the failure back when the
+// guess turns out right (or was never made).
+func Reserve(now time.Time, slots ...Slot) time.Duration {
+	reserveMu.Lock()
+	defer reserveMu.Unlock()
+	var wait time.Duration
+	for _, s := range slots {
+		wait = max(wait, s.b.Wait(s.key, now))
+	}
+	if wait > 0 {
+		return wait
+	}
+	for _, s := range slots {
+		s.b.Fail(s.key, now)
+	}
+	return 0
+}
+
+// Refund undoes the failure a Reserve counted on this slot.
+func (s Slot) Refund() {
+	s.b.mu.Lock()
+	defer s.b.mu.Unlock()
+	e := s.b.entries[s.key]
+	if e == nil || e.fails == 0 {
+		return
+	}
+	e.fails--
+	e.until = s.b.until(e)
+}
+
+// Failures is the slot's current failure count (including reserved attempts).
+func (s Slot) Failures() int {
+	s.b.mu.Lock()
+	defer s.b.mu.Unlock()
+	if e := s.b.entries[s.key]; e != nil {
+		return e.fails
+	}
+	return 0
+}
+
+// Reset forgets the slot's failures.
+func (s Slot) Reset() { s.b.Reset(s.key) }
 
 func (b *Backoff) Reset(key string) {
 	b.mu.Lock()

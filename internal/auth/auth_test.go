@@ -2,6 +2,8 @@ package auth
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -102,3 +104,50 @@ func TestKeys(t *testing.T) {
 		t.Fatal("sign purpose separation")
 	}
 }
+
+func TestReserveConcurrent(t *testing.T) {
+	b := NewBackoff(3, time.Second, 10*time.Second, time.Hour)
+	other := NewBackoff(100, time.Second, 10*time.Second, time.Hour)
+	now := time.Now()
+	var passed atomic.Int32
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			if Reserve(now, b.Slot("k"), other.Slot("k")) == 0 {
+				passed.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	// The free attempts plus the one that starts the backoff; the rest wait
+	// even though none of the guesses has been checked yet.
+	if n := passed.Load(); n != 4 {
+		t.Fatalf("%d concurrent attempts passed, want 4", n)
+	}
+	// A refused attempt counts on no slot.
+	if n := other.Slot("k").Failures(); n != 4 {
+		t.Fatalf("other slot has %d failures, want 4", n)
+	}
+}
+
+func TestReserveRefund(t *testing.T) {
+	b := NewBackoff(1, time.Second, 10*time.Second, time.Hour)
+	s := b.Slot("k")
+	now := time.Now()
+	for range 5 {
+		if Reserve(now, s) != 0 {
+			t.Fatal("successful attempts must not build up a backoff")
+		}
+		s.Refund()
+	}
+	Reserve(now, s)
+	Reserve(now, s) // second failure: backoff starts
+	if Reserve(now, s) == 0 {
+		t.Fatal("want a wait after two failures")
+	}
+	s.Refund() // the second one was right after all
+	if Reserve(now, s) != 0 {
+		t.Fatal("a refund must lift the wait it caused")
+	}
+}
+
