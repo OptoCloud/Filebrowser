@@ -75,10 +75,7 @@ func (f *FS) filesystemTop(dir string) (top string, ok bool) {
 // location on the destination filesystem, renamed into place, and only then
 // is the source removed, so a partial copy never appears under its final name.
 func (f *FS) Move(from, to string) error {
-	if err := f.absent(to); err != nil {
-		return err
-	}
-	err := f.rename(osPath(from), osPath(to))
+	err := f.renameNoReplace(from, to)
 	if err == nil || !isCrossDevice(err) {
 		return mapErr(err)
 	}
@@ -87,7 +84,7 @@ func (f *FS) Move(from, to string) error {
 	if err := f.copyTree(from, tmp); err != nil {
 		return mapErr(err)
 	}
-	if err := f.rename(tmp, osPath(to)); err != nil {
+	if err := f.renameNoReplace(tmp, to); err != nil {
 		_ = f.root.RemoveAll(tmp)
 		if !isCrossDevice(err) {
 			return mapErr(err)
@@ -102,6 +99,20 @@ func (f *FS) Move(from, to string) error {
 		slog.Warn("move: copied but could not remove source", "from", from, "err", err)
 	}
 	return nil
+}
+
+// renameNoReplace renames from to to (real paths) unless to exists. rename(2)
+// replaces an existing file, and os.Root offers no RENAME_NOREPLACE, so the
+// check and the rename happen under one lock: two of our own operations (say,
+// uploads of the same name finishing together) can never overwrite each
+// other. A writer outside this process (SMB, a shell) can still race it.
+func (f *FS) renameNoReplace(from, to string) error {
+	f.renameMu.Lock()
+	defer f.renameMu.Unlock()
+	if err := f.absent(to); err != nil {
+		return err
+	}
+	return f.rename(osPath(from), osPath(to))
 }
 
 // FileID identifies the file or folder at the real path p independently of

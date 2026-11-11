@@ -241,11 +241,18 @@ func (u *Uploads) place(ev tushandler.HookEvent, a *files.Access, within string)
 	if err := fsys.MkdirAll(dir); err != nil {
 		return "", reject(http.StatusConflict, "cannot create directory")
 	}
-	final, err := fsys.UniquePath(files.Join(dir, name))
-	if err != nil {
-		return "", err
+	// Another upload (or a new file) can take the free name between
+	// UniquePath and Move; Move never overwrites, so try the next name.
+	var final string
+	for range 5 {
+		if final, err = fsys.UniquePath(files.Join(dir, name)); err != nil {
+			return "", err
+		}
+		if err = fsys.Move(binPath(ev.Upload), final); !errors.Is(err, files.ErrExists) {
+			break
+		}
 	}
-	if err := fsys.Move(binPath(ev.Upload), final); err != nil {
+	if err != nil {
 		return "", fmt.Errorf("move upload: %w", err)
 	}
 	_ = fsys.Root().Remove(infoPath(ev.Upload.ID))

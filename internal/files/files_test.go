@@ -3,9 +3,12 @@ package files
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -362,5 +365,47 @@ func TestFileIDFollowsTheFileNotThePath(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "d", "a.txt"), []byte("new"), 0o644)
 	if replaced, _ := f.FileID("d/a.txt"); before != "" && replaced == before {
 		t.Errorf("a new file at the old path has the old identity %q", replaced)
+	}
+}
+
+// Concurrent moves to one name: exactly one wins and nothing is overwritten.
+func TestMoveNeverOverwrites(t *testing.T) {
+	f, dir := newFS(t)
+	const n = 20
+	for i := range n {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("src%d", i)), []byte(strconv.Itoa(i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Widen the window between the existence check and the rename.
+	rename := f.rename
+	f.rename = func(from, to string) error {
+		time.Sleep(time.Millisecond)
+		return rename(from, to)
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Go(func() { errs[i] = f.Move(fmt.Sprintf("src%d", i), "target") })
+	}
+	wg.Wait()
+	won := -1
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			if won >= 0 {
+				t.Fatalf("moves %d and %d both succeeded", won, i)
+			}
+			won = i
+		case !errors.Is(err, ErrExists):
+			t.Fatalf("move %d: %v", i, err)
+		default:
+			if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("src%d", i))); err != nil {
+				t.Fatalf("losing source %d is gone: %v", i, err)
+			}
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "target")); string(got) != strconv.Itoa(won) {
+		t.Fatalf("target = %q, want the winner's %d", got, won)
 	}
 }

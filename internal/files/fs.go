@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,9 @@ type FS struct {
 	dir  string
 	// rename is root.Rename; tests replace it to simulate crossing filesystems.
 	rename func(from, to string) error
+	// renameMu makes "target absent, then rename" one step for this process
+	// (see renameNoReplace).
+	renameMu sync.Mutex
 }
 
 // Central reserved directories. Trash and staged uploads may also live in a
