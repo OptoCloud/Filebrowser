@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"filebrowser/internal/files"
 	"filebrowser/internal/store"
@@ -129,10 +130,20 @@ func ErrorCode(w http.ResponseWriter, status int, code, msg string) {
 	JSON(w, status, errorBody{Error: msg, Code: code})
 }
 
+// bodyReadTimeout is how long reading a JSON request body may take.
+const bodyReadTimeout = 30 * time.Second
+
 // Decode reads a JSON body into v, rejecting unknown fields, trailing data
 // and NUL characters (PostgreSQL text cannot hold them and no field needs one).
 func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	// The server has no overall ReadTimeout (uploads and streams are long),
+	// so bound the read of small JSON bodies here: a client dripping one
+	// byte at a time must not hold the handler open. Cleared afterwards, or
+	// the connection's background read would hit it and cancel the request.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)) // unsupported in tests
 	body, err := io.ReadAll(r.Body)
+	_ = rc.SetReadDeadline(time.Time{})
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			Error(w, http.StatusRequestEntityTooLarge, "request body too large")
