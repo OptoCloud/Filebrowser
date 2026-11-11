@@ -256,7 +256,7 @@ func TestShareLockAndPasswordRules(t *testing.T) {
 	c := h.login("eve")
 	rec := c.do("POST", "/api/shares", map[string]any{"path": "eve/secret-plans.pdf", "password": "1234"})
 	expect(t, rec, 400)
-	if !strings.Contains(rec.Body.String(), "8 to 256 characters") {
+	if !strings.Contains(rec.Body.String(), "10 to 256 characters") {
 		t.Errorf("weak password error: %s", rec.Body.String())
 	}
 	created := decode[map[string]any](t, c.do("POST", "/api/shares", map[string]any{"path": "eve/secret-plans.pdf", "password": "long enough pw"}))

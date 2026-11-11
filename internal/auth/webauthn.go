@@ -43,6 +43,7 @@ type WebAuthn struct {
 	mu         sync.Mutex
 	ceremonies map[string]*Ceremony
 	anon       map[string]*Ceremony // CeremonyPasskey
+	seq        uint64               // insertion order; clock ticks can tie
 }
 
 // Ceremony is the server side of one registration or login attempt.
@@ -54,6 +55,7 @@ type Ceremony struct {
 
 	session webauthn.SessionData
 	expires time.Time
+	seq     uint64
 }
 
 // NewWebAuthn configures the relying party from the app origin: credentials
@@ -218,6 +220,8 @@ func (w *WebAuthn) put(c *Ceremony) (string, error) {
 	c.expires = time.Now().Add(ceremonyTTL)
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.seq++
+	c.seq = w.seq
 	m, limit := w.pool(c.Kind), maxCeremonies
 	if c.Kind == CeremonyPasskey {
 		limit = maxAnonCeremonies
@@ -230,9 +234,11 @@ func (w *WebAuthn) put(c *Ceremony) (string, error) {
 			return "", errors.New("too many webauthn ceremonies in progress")
 		}
 		// Drop the oldest passkey ceremony (it fails and can be retried).
+		// Order by seq, not expires: on Windows time.Now() is coarse enough
+		// that many ceremonies share one timestamp.
 		var oldest string
 		for k, o := range m {
-			if oldest == "" || o.expires.Before(m[oldest].expires) {
+			if oldest == "" || o.seq < m[oldest].seq {
 				oldest = k
 			}
 		}
