@@ -151,3 +151,37 @@ func TestReserveRefund(t *testing.T) {
 	}
 }
 
+// Anyone can start passkey logins; a flood of them must not crowd out the
+// ceremonies of known accounts (security-key second factor, registration).
+func TestPasskeyFloodKeepsOtherCeremonies(t *testing.T) {
+	w, err := NewWebAuthn("https://files.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := w.put(&Ceremony{Kind: CeremonyLogin, UserID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first string
+	for i := range maxAnonCeremonies + 50 {
+		tok, err := w.put(&Ceremony{Kind: CeremonyPasskey})
+		if err != nil {
+			t.Fatalf("passkey ceremony %d: %v", i, err)
+		}
+		if i == 0 {
+			first = tok
+		}
+	}
+	if len(w.anon) != maxAnonCeremonies {
+		t.Fatalf("%d passkey ceremonies kept, want %d", len(w.anon), maxAnonCeremonies)
+	}
+	if _, err := w.Take(first, CeremonyPasskey); err == nil {
+		t.Error("the oldest passkey ceremony should have been dropped")
+	}
+	if _, err := w.put(&Ceremony{Kind: CeremonyRegister, UserID: 1}); err != nil {
+		t.Fatalf("registration blocked: %v", err)
+	}
+	if c, err := w.Take(login, CeremonyLogin); err != nil || c.UserID != 1 {
+		t.Fatalf("second-factor ceremony lost: %v", err)
+	}
+}

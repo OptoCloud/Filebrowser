@@ -25,8 +25,14 @@ var (
 )
 
 const (
-	ceremonyTTL   = 5 * time.Minute
+	ceremonyTTL = 5 * time.Minute
+	// maxCeremonies bounds ceremonies for a known account (second factor,
+	// registration): reaching them takes a password or a session.
 	maxCeremonies = 10000
+	// maxAnonCeremonies bounds passwordless (passkey) logins, which anyone can
+	// start. They are kept apart and the oldest is dropped when full, so a
+	// flood of them never blocks second-factor logins or registration.
+	maxAnonCeremonies = 2000
 )
 
 // WebAuthn handles security keys (YubiKey and other FIDO2 keys, platform
@@ -36,6 +42,7 @@ type WebAuthn struct {
 
 	mu         sync.Mutex
 	ceremonies map[string]*Ceremony
+	anon       map[string]*Ceremony // CeremonyPasskey
 }
 
 // Ceremony is the server side of one registration or login attempt.
@@ -64,7 +71,7 @@ func NewWebAuthn(appOrigin string) (*WebAuthn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WebAuthn{lib: lib, ceremonies: map[string]*Ceremony{}}, nil
+	return &WebAuthn{lib: lib, ceremonies: map[string]*Ceremony{}, anon: map[string]*Ceremony{}}, nil
 }
 
 // WebAuthnUser adapts an account for the webauthn library.
@@ -191,26 +198,48 @@ func (w *WebAuthn) ValidatePasskey(c *Ceremony, response []byte, lookup func(han
 func (w *WebAuthn) Take(token, kind string) (*Ceremony, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	c := w.ceremonies[token]
-	delete(w.ceremonies, token)
+	m := w.pool(kind)
+	c := m[token]
+	delete(m, token)
 	if c == nil || c.Kind != kind || time.Now().After(c.expires) {
 		return nil, ErrCeremony
 	}
 	return c, nil
 }
 
+func (w *WebAuthn) pool(kind string) map[string]*Ceremony {
+	if kind == CeremonyPasskey {
+		return w.anon
+	}
+	return w.ceremonies
+}
+
 func (w *WebAuthn) put(c *Ceremony) (string, error) {
 	c.expires = time.Now().Add(ceremonyTTL)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.ceremonies) >= maxCeremonies {
+	m, limit := w.pool(c.Kind), maxCeremonies
+	if c.Kind == CeremonyPasskey {
+		limit = maxAnonCeremonies
+	}
+	if len(m) >= limit {
 		w.gcLocked()
-		if len(w.ceremonies) >= maxCeremonies {
+	}
+	if len(m) >= limit {
+		if c.Kind != CeremonyPasskey {
 			return "", errors.New("too many webauthn ceremonies in progress")
 		}
+		// Drop the oldest passkey ceremony (it fails and can be retried).
+		var oldest string
+		for k, o := range m {
+			if oldest == "" || o.expires.Before(m[oldest].expires) {
+				oldest = k
+			}
+		}
+		delete(m, oldest)
 	}
 	tok := NewToken(24)
-	w.ceremonies[tok] = c
+	m[tok] = c
 	return tok, nil
 }
 
@@ -223,9 +252,11 @@ func (w *WebAuthn) GC() {
 
 func (w *WebAuthn) gcLocked() {
 	now := time.Now()
-	for k, c := range w.ceremonies {
-		if now.After(c.expires) {
-			delete(w.ceremonies, k)
+	for _, m := range []map[string]*Ceremony{w.ceremonies, w.anon} {
+		for k, c := range m {
+			if now.After(c.expires) {
+				delete(m, k)
+			}
 		}
 	}
 }
