@@ -2,6 +2,7 @@
   import QRCode from 'qrcode';
   import { goto, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
+  import { resolve } from '$app/paths';
   import { ApiError, del, errorMessage, logout, post } from '#lib/api.js';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Modal from '#lib/components/Modal.svelte';
@@ -48,7 +49,7 @@
     busy = true;
     try {
       await post('/api/auth/totp/enable', { code: code.replace(/\s/g, '') });
-      await goto('/settings?totp=1', { invalidateAll: true });
+      await goto(resolve('/settings?totp=1'), { invalidateAll: true });
     } catch (x) {
       err = errorMessage(x);
       code = '';
@@ -113,7 +114,7 @@
       addOpen = false;
       if (wasRestricted) {
         // The session is now unrestricted (the server rotated the cookie).
-        await goto('/settings?key=1', { invalidateAll: true });
+        await goto(resolve('/settings?key=1'), { invalidateAll: true });
         return;
       }
       keyNotice = `Added "${name}".`;
@@ -165,7 +166,7 @@
     {#if me?.totp_enabled}
       <p>
         <span class="badge ok">enabled</span>
-        <span class="small muted">Manage it in <a href="/settings">Settings</a>.</span>
+        <span class="small muted">Manage it in <a href={resolve('/settings')}>Settings</a>.</span>
       </p>
     {:else}
       {#if err}<div class="error">{err}</div>{/if}
@@ -186,7 +187,9 @@
           />{/if}
         <p class="small muted">Or enter this key manually:</p>
         <p class="mono secret">{secret}</p>
-        <p class="small"><a href={otpURL}>Open in an authenticator app on this device</a></p>
+        <p class="small">
+          <a href={otpURL} rel="external">Open in an authenticator app on this device</a>
+        </p>
         <p>2. Enter the 6-digit code it shows:</p>
         <form class="row" onsubmit={enable}>
           <input
@@ -242,7 +245,7 @@
   {#if me?.restricted}
     <p class="small"><button class="ghost small" onclick={() => logout()}>Log out</button></p>
   {:else}
-    <p class="small"><a href="/settings">Back to settings</a></p>
+    <p class="small"><a href={resolve('/settings')}>Back to settings</a></p>
   {/if}
 </div>
 

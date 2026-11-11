@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto, invalidate, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
+  import { resolve } from '$app/paths';
   import { del, errorMessage, logout, post } from '#lib/api.js';
   import { formatDate, formatSize } from '#lib/format.js';
   import type { Session } from '#lib/types.js';
@@ -83,7 +84,7 @@
     try {
       await del('/api/me/sessions/' + s.id);
       if (s.current) {
-        await goto('/login', { invalidateAll: true });
+        await goto(resolve('/login'), { invalidateAll: true });
         return;
       }
     } catch (x) {
@@ -203,7 +204,7 @@
           </p>
         {/if}
         <div class="row">
-          <a class="btn" href="/settings/2fa">Manage</a>
+          <a class="btn" href={resolve('/settings/2fa')}>Manage</a>
           {#if canDisableTOTP}
             <button class="danger" onclick={() => (disableOpen = true)}
               >Disable authenticator app</button
@@ -212,7 +213,7 @@
         </div>
       {:else}
         <p><span class="badge bad">not enabled</span></p>
-        <a class="btn primary" href="/settings/2fa">Set up</a>
+        <a class="btn primary" href={resolve('/settings/2fa')}>Set up</a>
       {/if}
     </div>
 
@@ -242,7 +243,7 @@
             <a
               class="btn small"
               href={'/api/auth/oidc/start?provider=' + encodeURIComponent(p.id) + '&link=1'}
-              data-sveltekit-reload
+              rel="external"
             >
               Link {p.name}
             </a>

@@ -2,7 +2,8 @@
   import { SvelteSet } from 'svelte/reactivity';
   import { invalidate } from '$app/navigation';
   import { errorMessage, post } from '#lib/api.js';
-  import { baseName, filesHref, formatDate, formatSize, parentPath } from '#lib/format.js';
+  import { baseName, formatDate, formatSize, parentPath } from '#lib/format.js';
+  import { filesHref } from '#lib/nav.js';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Icon from '#lib/components/Icon.svelte';
 

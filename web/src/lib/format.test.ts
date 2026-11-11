@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   baseName,
-  filesHref,
   formatSize,
   isViewableImage,
   joinPath,
@@ -43,11 +42,6 @@ describe('path helpers', () => {
       { name: 'a', path: 'a' },
       { name: 'b', path: 'a/b' },
     ]);
-  });
-
-  it('builds encoded /files URLs', () => {
-    expect(filesHref('')).toBe('/files');
-    expect(filesHref('a b/c#d')).toBe('/files/a%20b/c%23d');
   });
 });
 

@@ -95,7 +95,7 @@
       <span class="title" title={entry.name}>{entry.name}</span>
       <span class="muted small hide-mobile">{formatSize(entry.size)}</span>
       <span class="spacer"></span>
-      <a class="btn small" href={downloadURL} download
+      <a class="btn small" href={downloadURL} rel="external" download
         ><Icon name="download" size={16} /><span class="hide-mobile">Download</span></a
       >
       <button class="icon" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
@@ -130,7 +130,7 @@
           <div class="none">
             <Icon name="file" size={64} />
             <p>No preview available for this file.</p>
-            <a class="btn primary" href={downloadURL} download
+            <a class="btn primary" href={downloadURL} rel="external" download
               ><Icon name="download" size={16} />Download</a
             >
           </div>

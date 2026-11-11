@@ -260,7 +260,7 @@
         <a
           class="btn full"
           href={'/api/auth/oidc/start?provider=' + encodeURIComponent(p.id)}
-          data-sveltekit-reload
+          rel="external"
         >
           Continue with {p.name}
         </a>

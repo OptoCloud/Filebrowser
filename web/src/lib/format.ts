@@ -31,11 +31,6 @@ export function relativeTime(s: string): string {
 }
 
 /** Slash-separated relative path → /files/... URL. */
-export function filesHref(path: string): string {
-  if (!path) return '/files';
-  return '/files/' + path.split('/').map(encodeURIComponent).join('/');
-}
-
 export function parentPath(p: string): string {
   const i = p.lastIndexOf('/');
   return i < 0 ? '' : p.slice(0, i);

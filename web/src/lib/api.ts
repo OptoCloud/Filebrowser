@@ -1,4 +1,5 @@
 import { goto } from '$app/navigation';
+import { resolve } from '$app/paths';
 
 export class ApiError extends Error {
   status: number;
@@ -48,12 +49,12 @@ export function handleAuthError(err: unknown): boolean {
   const here = location.pathname + location.search;
   if (err.status === 401 && err.code === 'unauthenticated') {
     if (!location.pathname.startsWith('/login')) {
-      goto('/login?next=' + encodeURIComponent(here));
+      void goto(resolve(`/login?${new URLSearchParams({ next: here })}`));
     }
     return true;
   }
   if (err.status === 403 && err.code === 'totp_enrollment_required') {
-    if (location.pathname !== '/settings/2fa') goto('/settings/2fa');
+    if (location.pathname !== '/settings/2fa') void goto(resolve('/settings/2fa'));
     return true;
   }
   return false;
@@ -106,7 +107,7 @@ export async function logout(endpoint = '/api/auth/logout') {
   } catch {
     /* the session may already be gone */
   }
-  await goto('/login', { invalidateAll: true });
+  await goto(resolve('/login'), { invalidateAll: true });
 }
 
 export function qs(

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { filesHref } from '#lib/nav.js';
 </script>
 
 <div class="page">
@@ -9,5 +10,7 @@
       ? "This page doesn't exist, or you don't have access to it."
       : page.error?.message}
   </p>
-  {#if !page.url.pathname.startsWith('/s/')}<p><a href="/files">Back to files</a></p>{/if}
+  {#if !page.url.pathname.startsWith('/s/')}<p>
+      <a href={filesHref('')}>Back to files</a>
+    </p>{/if}
 </div>

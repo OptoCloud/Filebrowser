@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import { resolve } from '$app/paths';
   import { del, errorMessage, get, patch, post, put, qs } from '#lib/api.js';
   import { formatDate, formatSize } from '#lib/format.js';
   import type { AdminUser, AuditEntry, Grant, Invite, Session } from '#lib/types.js';
@@ -134,8 +135,8 @@
     } catch (x) {
       err = errorMessage(x);
     }
-    if (s.current) goto('/login', { invalidateAll: true });
-    else loadSessions();
+    if (s.current) void goto(resolve('/login'), { invalidateAll: true });
+    else void loadSessions();
   }
 
   // Invites

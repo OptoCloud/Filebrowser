@@ -1,7 +1,9 @@
 <script lang="ts">
   import '../app.css';
+  import { resolve } from '$app/paths';
   import { page } from '$app/state';
   import { logout } from '#lib/api.js';
+  import { filesHref } from '#lib/nav.js';
   import { appUploader } from '#lib/upload.svelte.js';
   import Icon from '#lib/components/Icon.svelte';
   import UploadPanel from '#lib/components/UploadPanel.svelte';
@@ -33,28 +35,38 @@
   {@render children()}
 {:else}
   <nav class="top">
-    <a class="brand" href="/files"><Icon name="folder" size={22} /> Files</a>
+    <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> Files</a>
     <button class="icon menu-btn" onclick={() => (menuOpen = !menuOpen)} aria-label="Menu"
       ><Icon name="menu" /></button
     >
     <div class="links" class:open={menuOpen}>
       {#if !me.restricted}
-        <a href="/files" class:active={active('/files')} onclick={() => (menuOpen = false)}>Files</a
+        <a href={filesHref('')} class:active={active('/files')} onclick={() => (menuOpen = false)}
+          >Files</a
         >
-        <a href="/shares" class:active={active('/shares')} onclick={() => (menuOpen = false)}
-          >Shares</a
+        <a
+          href={resolve('/shares')}
+          class:active={active('/shares')}
+          onclick={() => (menuOpen = false)}>Shares</a
         >
-        <a href="/trash" class:active={active('/trash')} onclick={() => (menuOpen = false)}>Trash</a
+        <a
+          href={resolve('/trash')}
+          class:active={active('/trash')}
+          onclick={() => (menuOpen = false)}>Trash</a
         >
         {#if me.user.role === 'admin'}
-          <a href="/admin" class:active={active('/admin')} onclick={() => (menuOpen = false)}
-            >Admin</a
+          <a
+            href={resolve('/admin')}
+            class:active={active('/admin')}
+            onclick={() => (menuOpen = false)}>Admin</a
           >
         {/if}
       {/if}
       <span class="spacer"></span>
-      <a href="/settings" class:active={active('/settings')} onclick={() => (menuOpen = false)}
-        >{me.user.username}</a
+      <a
+        href={resolve('/settings')}
+        class:active={active('/settings')}
+        onclick={() => (menuOpen = false)}>{me.user.username}</a
       >
       <button class="small" onclick={signOut}>Log out</button>
     </div>

@@ -6,6 +6,7 @@
   import { modal } from '#lib/dialog.js';
   import { formatDate, formatSize, isViewableImage, kindOf, pathCrumbs } from '#lib/format.js';
   import { LatestRequest } from '#lib/latest.js';
+  import { shareHref } from '#lib/nav.js';
   import type { Entry, ShareInfo } from '#lib/types.js';
   import { Uploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
   import EntryIcon from '#lib/components/EntryIcon.svelte';
@@ -102,7 +103,7 @@
   }
 
   function openDir(p: string) {
-    goto(base + qs({ path: p || undefined }));
+    void goto(shareHref(token, p));
   }
 
   function fileURL(p: string, inline = false) {
@@ -215,7 +216,7 @@
           >
         </div>
         <span class="spacer"></span>
-        <a class="btn primary" href={fileURL('')} download
+        <a class="btn primary" href={fileURL('')} rel="external" download
           ><Icon name="download" size={16} />Download</a
         >
       </div>
@@ -243,6 +244,7 @@
       <a
         class="btn primary small"
         href={base + '/zip' + qs({ paths: sub ? [sub] : undefined })}
+        rel="external"
         download
       >
         <Icon name="download" size={16} />Download {sub ? 'folder' : 'all'}
@@ -281,7 +283,7 @@
     <header class="row">
       <strong class="oname">{preview.name}</strong>
       <span class="spacer"></span>
-      <a class="btn small" href={fileURL(preview.path)} download
+      <a class="btn small" href={fileURL(preview.path)} rel="external" download
         ><Icon name="download" size={16} />Download</a
       >
       <button class="icon" aria-label="Close" onclick={() => (preview = null)}
@@ -294,7 +296,7 @@
       {:else}
         <div class="center">
           <p>No preview available.</p>
-          <a class="btn primary" href={fileURL(preview.path)} download
+          <a class="btn primary" href={fileURL(preview.path)} rel="external" download
             >Download ({formatSize(preview.size)})</a
           >
         </div>

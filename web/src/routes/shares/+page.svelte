@@ -1,7 +1,8 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { del, errorMessage, get, qs } from '#lib/api.js';
-  import { filesHref, formatDate, parentPath } from '#lib/format.js';
+  import { formatDate, parentPath } from '#lib/format.js';
+  import { filesHref } from '#lib/nav.js';
   import { LatestRequest } from '#lib/latest.js';
   import type { Share } from '#lib/types.js';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';

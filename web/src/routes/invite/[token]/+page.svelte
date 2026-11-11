@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import { filesHref } from '#lib/nav.js';
   import { errorMessage, post } from '#lib/api.js';
   import { formatDate } from '#lib/format.js';
 
@@ -25,7 +26,7 @@
     busy = true;
     try {
       await post('/api/auth/invite/accept', { token, username, password });
-      await goto('/files', { invalidateAll: true });
+      await goto(filesHref(''), { invalidateAll: true });
     } catch (x) {
       err = errorMessage(x);
     } finally {

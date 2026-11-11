@@ -4,7 +4,8 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { download, errorMessage, get, post, postForm, qs } from '#lib/api.js';
-  import { filesHref, formatDate, formatSize, parentPath, pathCrumbs } from '#lib/format.js';
+  import { formatDate, formatSize, parentPath, pathCrumbs } from '#lib/format.js';
+  import { filesHref } from '#lib/nav.js';
   import { LatestRequest } from '#lib/latest.js';
   import type { Entry, Listing } from '#lib/types.js';
   import { appUploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
@@ -167,7 +168,7 @@
   }
 
   function openEntry(e: Entry) {
-    if (e.is_dir) goto(filesHref(e.path));
+    if (e.is_dir) void goto(filesHref(e.path));
     else previewPath = e.path;
   }
 
@@ -300,7 +301,7 @@
 >
   <div class="toolbar">
     <nav class="crumbs" aria-label="Breadcrumbs">
-      <a href="/files">Home</a>
+      <a href={filesHref('')}>Home</a>
       {#each crumbs as c (c.path)}
         <span class="muted">/</span>
         <a href={filesHref(c.path)}>{c.name}</a>
