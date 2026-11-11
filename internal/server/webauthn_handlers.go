@@ -268,6 +268,9 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	id := httpx.IdentityFrom(r.Context())
+	if !requireFreshLogin(w, id) {
+		return
+	}
 	wu, err := s.webauthnUser(r.Context(), id.User)
 	if err != nil {
 		httpx.InternalError(w, r, err)

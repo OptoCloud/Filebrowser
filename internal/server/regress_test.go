@@ -146,6 +146,21 @@ func TestFirstPasswordNeedsReauth(t *testing.T) {
 	expect(t, h.session(u, time.Minute).do("POST", "/api/me/password", map[string]string{"new": testPassword}), 200)
 }
 
+// A stolen session cookie must not be turned into a lasting credential:
+// adding TOTP or a passkey needs a recent login.
+func TestNewCredentialNeedsFreshLogin(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("reader", "user")
+	for _, ep := range []string{"/api/auth/totp/setup", "/api/me/webauthn/register/begin"} {
+		rec := h.session(u, time.Hour).do("POST", ep, map[string]string{})
+		expect(t, rec, 401)
+		if decode[map[string]string](t, rec)["code"] != "reauth_required" {
+			t.Fatalf("%s: body %s", ep, rec.Body.String())
+		}
+		expect(t, h.session(u, time.Minute).do("POST", ep, map[string]string{}), 200)
+	}
+}
+
 // F16: malformed audit filters are rejected, not passed to the database.
 func TestAuditFilterValidation(t *testing.T) {
 	h := newHarness(t)

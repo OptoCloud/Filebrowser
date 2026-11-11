@@ -309,10 +309,29 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, resp)
 }
 
+// freshLogin is how recent a login must be to add a sign-in method.
+const freshLogin = 15 * time.Minute
+
+// requireFreshLogin refuses to add a long-lived credential (TOTP, a passkey or
+// security key) on an older session: a stolen session cookie must not be
+// turned into a second factor or passkey that outlives it. Sessions are
+// created at login, so their age is the time since the user authenticated.
+func requireFreshLogin(w http.ResponseWriter, id *httpx.Identity) bool {
+	if time.Since(id.Session.CreatedAt) <= freshLogin {
+		return true
+	}
+	httpx.ErrorCode(w, http.StatusUnauthorized, "reauth_required",
+		"for your security, log out and log in again to add a sign-in method")
+	return false
+}
+
 func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 	id := httpx.IdentityFrom(r.Context())
 	if id.User.TOTPEnabled() {
 		httpx.Error(w, http.StatusConflict, "two-factor authentication is already enabled")
+		return
+	}
+	if !requireFreshLogin(w, id) {
 		return
 	}
 	secret := auth.NewTOTPSecret()
