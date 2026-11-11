@@ -41,6 +41,7 @@ type Service struct {
 
 	hlsMu    sync.Mutex
 	hls      map[string]*hlsSession
+	hlsBytes int64 // segments on disk, all sessions
 	hlsPlans flights[*hlsSession]
 }
 

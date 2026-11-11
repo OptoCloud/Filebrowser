@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ type hlsSession struct {
 
 	// Guarded by Service.hlsMu.
 	have     []bool
+	size     []int64 // bytes of each produced segment
 	init     bool
 	run      *hlsRun
 	err      error
@@ -133,7 +135,7 @@ func (s *Service) hlsSession(ctx context.Context, userID int64, path, variant st
 		bounds := planSegments(kf, probe.Duration)
 		h := &hlsSession{
 			key: key, path: path, variant: variant, dir: dir, spec: spec, probe: probe, video: video,
-			keyframes: kf, bounds: bounds, have: make([]bool, len(bounds)-1), lastUsed: time.Now(), changed: make(chan struct{}),
+			keyframes: kf, bounds: bounds, have: make([]bool, len(bounds)-1), size: make([]int64, len(bounds)-1), lastUsed: time.Now(), changed: make(chan struct{}),
 		}
 		s.hlsMu.Lock()
 		if old := s.hls[key]; old != nil {
@@ -531,7 +533,14 @@ func (s *Service) hlsSplit(h *hlsSession, r *hlsRun, out io.Reader, wait func() 
 			return nil
 		}
 		name := f.Name()
-		err := f.Close()
+		var size int64
+		fi, err := f.Stat()
+		if err == nil {
+			size = fi.Size()
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
 		f = nil
 		if err == nil {
 			err = os.Rename(name, h.segPath(cur))
@@ -543,7 +552,10 @@ func (s *Service) hlsSplit(h *hlsSession, r *hlsRun, out io.Reader, wait func() 
 		s.hlsMu.Lock()
 		defer s.hlsMu.Unlock()
 		h.have[cur] = true
+		h.size[cur] = size
+		s.hlsBytes += size
 		r.next = cur + 1
+		s.trimHLS()
 		h.broadcast()
 		return nil
 	}
@@ -656,14 +668,66 @@ func writeAtomic(path string, b []byte) error {
 func (s *Service) evictHLS() {
 	s.hlsMu.Lock()
 	defer s.hlsMu.Unlock()
-	for k, h := range s.hls {
+	for _, h := range s.hls {
 		if time.Since(h.lastUsed) > hlsTTL {
 			if h.run != nil {
 				h.run.cancel()
 				continue // deleted next time, once the run has exited
 			}
-			delete(s.hls, k)
-			_ = os.RemoveAll(h.dir)
+			s.dropHLS(h)
 		}
 	}
+}
+
+// hlsBehind is how many segments before the playhead trimHLS keeps (a short
+// seek back should not need a new run).
+const hlsBehind = 5
+
+// hlsBudget caps the disk used by live HLS segments: a quarter of the media
+// cache cap, or none when that is unlimited.
+func (s *Service) hlsBudget() int64 { return s.cfg.CacheMaxBytes / 4 }
+
+// trimHLS brings the segments on disk back under hlsBudget: first whole idle
+// sessions, least recently used first, then segments well behind playback.
+// Segments are made on request, so anything deleted is made again if needed;
+// what is left over the budget is ahead of playback, which hlsMaxAhead and
+// the job slots bound. The caller holds hlsMu.
+func (s *Service) trimHLS() {
+	budget := s.hlsBudget()
+	if budget <= 0 || s.hlsBytes <= budget {
+		return
+	}
+	idle := make([]*hlsSession, 0, len(s.hls))
+	for _, h := range s.hls {
+		if h.run == nil && time.Since(h.lastUsed) > hlsIdle {
+			idle = append(idle, h)
+		}
+	}
+	slices.SortFunc(idle, func(a, b *hlsSession) int { return a.lastUsed.Compare(b.lastUsed) })
+	for _, h := range idle {
+		if s.hlsBytes <= budget {
+			return
+		}
+		s.dropHLS(h)
+	}
+	for _, h := range s.hls {
+		for i := 0; i < h.lastReq-hlsBehind && s.hlsBytes > budget; i++ {
+			// A segment that is open cannot be removed on Windows; it stays.
+			if h.have[i] && os.Remove(h.segPath(i)) == nil {
+				h.have[i] = false
+				s.hlsBytes -= h.size[i]
+				h.size[i] = 0
+			}
+		}
+	}
+}
+
+// dropHLS forgets a session without a run and deletes its files. The caller
+// holds hlsMu.
+func (s *Service) dropHLS(h *hlsSession) {
+	delete(s.hls, h.key)
+	for _, n := range h.size {
+		s.hlsBytes -= n
+	}
+	_ = os.RemoveAll(h.dir)
 }

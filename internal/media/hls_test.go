@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPlanSegments(t *testing.T) {
@@ -302,6 +303,59 @@ func sampleCount(t *testing.T, b []byte, track uint32) int {
 					}
 				})
 			})
+		}
+	}
+}
+
+// The live HLS cache stays within its budget: idle sessions go first (least
+// recently used first), then segments well behind playback; segments around
+// and ahead of the playhead stay.
+func TestTrimHLS(t *testing.T) {
+	s := &Service{hls: map[string]*hlsSession{}}
+	s.cfg.CacheMaxBytes = 4 * 1000 // budget 1000 bytes
+	session := func(key string, segs int, used time.Duration, running bool) *hlsSession {
+		h := &hlsSession{key: key, dir: filepath.Join(t.TempDir(), key), have: make([]bool, segs),
+			size: make([]int64, segs), lastUsed: time.Now().Add(-used)}
+		if err := os.MkdirAll(h.dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for i := range segs {
+			if err := os.WriteFile(h.segPath(i), make([]byte, 100), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			h.have[i], h.size[i] = true, 100
+			s.hlsBytes += 100
+		}
+		if running {
+			h.run = &hlsRun{}
+		}
+		s.hls[key] = h
+		return h
+	}
+	old := session("old", 3, time.Hour, false)
+	recent := session("recent", 3, 10*time.Minute, false)
+	live := session("live", 12, 0, true)
+	live.lastReq = 10
+	s.trimHLS() // 1800 bytes
+	if _, ok := s.hls[old.key]; ok {
+		t.Error("the least recently used idle session should go first")
+	}
+	if _, err := os.Stat(old.dir); !os.IsNotExist(err) {
+		t.Error("its files should be deleted")
+	}
+	if _, ok := s.hls[recent.key]; ok {
+		t.Error("the other idle session should go too (1500 bytes is still over)")
+	}
+	// 1200 bytes left in the live session: two segments behind playback go.
+	if s.hlsBytes != 1000 {
+		t.Fatalf("hlsBytes = %d, want 1000", s.hlsBytes)
+	}
+	for i, have := range live.have {
+		if want := i >= 2; have != want {
+			t.Errorf("segment %d kept = %v, want %v", i, have, want)
+		}
+		if _, err := os.Stat(live.segPath(i)); (err == nil) != have {
+			t.Errorf("segment %d on disk = %v, tracked = %v", i, err == nil, have)
 		}
 	}
 }
