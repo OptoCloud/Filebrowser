@@ -45,7 +45,7 @@
 		"node": ">=24",
 		"pnpm": ">=12"
 	},
-	"packageManager": "pnpm@12.11.2",
+	"packageManager": "pnpm@12.18.0",
 	"imports": {
 		"#lib/*": "./src/lib/*"
 	}

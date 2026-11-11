@@ -2,7 +2,7 @@
 # Multi-arch image on Debian 13 (trixie) slim. Build stages run natively and
 # cross-compile; only the runtime stage runs for the target platform.
 
-FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS web
+FROM --platform=$BUILDPLATFORM node:26-trixie-slim AS web
 WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml web/.npmrc ./
 RUN npm install -g "$(node -p "require('./package.json').packageManager")" && pnpm install --frozen-lockfile

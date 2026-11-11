@@ -39,7 +39,7 @@ and create shares). Such users get a restricted session until they enroll.
 
 ## Development
 
-Requirements: Go 1.27.4+, Node 24 LTS with pnpm (version pinned in
+Requirements: Go 1.27.4+, Node 24 or 26 LTS with pnpm (version pinned in
 `web/package.json`), Docker (for PostgreSQL), ffmpeg 6.0+. Development works on
 Linux, Windows and macOS; on Windows the ffmpeg sandbox is the same
 AppContainer as in production.
