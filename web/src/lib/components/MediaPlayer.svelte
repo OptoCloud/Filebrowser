@@ -155,9 +155,9 @@
       el.src = url;
       return;
     }
-    let hls: import('hls.js').default | undefined;
+    let hls: import('hls.js/light').default | undefined;
     let cancelled = false;
-    import('hls.js')
+    import('hls.js/light')
       .then(({ default: Hls }) => {
         if (cancelled) return;
         // Segments are made on request, which can take a while (a job slot,
