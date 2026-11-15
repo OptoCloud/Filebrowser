@@ -15,7 +15,7 @@ in a sandbox; the server refuses to start if the sandbox does not work).
 
 Version policy: Debian 13 is the current Debian stable, supported until mid-2030
 (Debian LTS included). PostgreSQL 17 is Debian 13's version. The frontend is
-built with Node 24 LTS (build time only; Node is not needed at runtime).
+built with Node 26 LTS (build time only; Node is not needed at runtime).
 
 ## Releases
 

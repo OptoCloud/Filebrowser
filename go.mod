@@ -9,10 +9,10 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fxamacker/cbor/v2 v2.10.0
 	github.com/go-webauthn/webauthn v0.18.2
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/tus/tusd/v2 v2.10.1
-	golang.org/x/crypto v0.58.0
-	golang.org/x/exp v0.0.0-20261109185158-a52e3aef5920
+	golang.org/x/crypto v0.59.0
+	golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4
 	golang.org/x/image v0.48.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
