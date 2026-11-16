@@ -52,7 +52,11 @@ export function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
-export type Kind = 'dir' | 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'archive' | 'file';
+export type Kind =
+  'dir' | 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'archive' | 'model' | 'file';
+
+/** 3D model types the viewer can draw. */
+export const MODEL_TYPES = ['model/obj', 'application/vnd.autodesk.fbx'];
 
 export function kindOf(e: { is_dir: boolean; mime?: string }): Kind {
   if (e.is_dir) return 'dir';
@@ -61,14 +65,16 @@ export function kindOf(e: { is_dir: boolean; mime?: string }): Kind {
   if (m.startsWith('video/')) return 'video';
   if (m.startsWith('audio/')) return 'audio';
   if (m === 'application/pdf') return 'pdf';
+  if (MODEL_TYPES.includes(m)) return 'model';
   if (
     m.startsWith('text/') ||
     m === 'application/json' ||
     m === 'application/xml' ||
-    m === 'application/x-subrip'
+    m === 'application/x-subrip' ||
+    m === 'model/step'
   )
     return 'text';
-  if (/zip|tar|gzip|7z|rar/.test(m)) return 'archive';
+  if (/zip|tar|gzip|bzip2|7z|rar/.test(m) && !m.includes('officedocument')) return 'archive';
   return 'file';
 }
 

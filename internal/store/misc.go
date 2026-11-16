@@ -259,3 +259,25 @@ func (s *Store) Audit(ctx context.Context, q AuditQuery) ([]*AuditEntry, error) 
 		WHERE ($1 = 0 OR a.id < $1) AND ($2 = '' OR starts_with(a.action, $2)) AND ($3 = 0 OR a.user_id = $3)
 		ORDER BY a.id DESC LIMIT $4`, q.BeforeID, q.Action, q.UserID, q.Limit)
 }
+
+// FileType returns the cached verified type of a file, if it is unchanged.
+func (s *Store) FileType(ctx context.Context, path string, size, mtime int64) (json.RawMessage, error) {
+	var raw json.RawMessage
+	err := s.pool.QueryRow(ctx, `SELECT info_json FROM file_types WHERE path = $1 AND size = $2 AND mtime = $3`,
+		path, size, mtime).Scan(&raw)
+	return raw, notFound(err)
+}
+
+func (s *Store) PutFileType(ctx context.Context, path string, size, mtime int64, raw json.RawMessage) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO file_types (path, size, mtime, info_json) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime,
+		info_json = excluded.info_json, sniffed_at = now()`, path, size, mtime, raw)
+	return err
+}
+
+// DeleteFileTypesBefore drops entries not refreshed since cutoff (files that
+// were deleted or renamed leave theirs behind).
+func (s *Store) DeleteFileTypesBefore(ctx context.Context, cutoff time.Time) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM file_types WHERE sniffed_at < $1`, cutoff)
+	return err
+}

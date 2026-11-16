@@ -59,7 +59,14 @@ func serveFile(w http.ResponseWriter, r *http.Request, fsys *files.FS, p string,
 		return
 	}
 	defer f.Close()
-	ct := files.MimeType(fi.Name())
+	// What may render in a browser is decided by the content, never the name:
+	// a script named photo.jpg is not an image.
+	t, err := files.VerifyFile(fi.Name(), f)
+	if err != nil {
+		httpx.FileError(w, r, err)
+		return
+	}
+	ct := t.Mime
 	inline := o.inline && files.InlineSafe(ct, o.allowPDF)
 	httpx.UserContentHeaders(w, ct, inline, fi.Name())
 	if inline && ct == "application/pdf" && o.frameAncestors != "" {

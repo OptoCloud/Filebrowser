@@ -23,6 +23,8 @@ var mimeTypes = map[string]string{
 	".log": "text/plain", ".srt": "application/x-subrip", ".vtt": "text/vtt", ".ass": "text/x-ssa",
 	".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".step": MimeSTEP, ".stp": MimeSTEP, ".fbx": MimeFBX, ".obj": MimeOBJ,
+	".bz2": "application/x-bzip2", ".xz": "application/x-xz", ".zst": "application/zstd", ".tgz": "application/gzip",
 	".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 

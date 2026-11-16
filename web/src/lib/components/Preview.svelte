@@ -1,10 +1,14 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { errorMessage, post, qs } from '#lib/api.js';
+  import { errorMessage, get, post, qs } from '#lib/api.js';
   import { modal } from '#lib/dialog.js';
   import { TEXT_PREVIEW_MAX, formatSize, isViewableImage, kindOf } from '#lib/format.js';
-  import type { Entry } from '#lib/types.js';
+  import type { Entry, FileInfo } from '#lib/types.js';
+  import ArchiveView from './ArchiveView.svelte';
+  import CodeView from './CodeView.svelte';
   import Icon from './Icon.svelte';
+  import ImageViewer from './ImageViewer.svelte';
+  import ModelViewer from './ModelViewer.svelte';
   import MediaPlayer from './MediaPlayer.svelte';
 
   // The previewed entry is tracked by path, so a reloaded or re-sorted listing
@@ -17,7 +21,18 @@
 
   const index = $derived(entries.findIndex((e) => e.path === path));
   const entry = $derived<Entry | undefined>(entries[index]);
-  const kind = $derived(entry ? kindOf(entry) : 'file');
+  // The viewer is chosen from what the server found the content to be, never
+  // from the name: `info` arrives before anything is rendered.
+  let info = $state<FileInfo | null>(null);
+  const kind = $derived(
+    !entry || !info
+      ? 'file'
+      : info.archive
+        ? 'archive'
+        : info.text && kindOf({ is_dir: false, mime: info.mime }) === 'file'
+          ? 'text'
+          : kindOf({ is_dir: false, mime: info.mime })
+  );
   const fileCount = $derived(entries.reduce((n, e) => n + (e.is_dir ? 0 : 1), 0));
   const downloadURL = $derived(entry ? '/api/files/download' + qs({ path: entry.path }) : '');
   const inlineURL = $derived(
@@ -41,27 +56,36 @@
     text = null;
     pdfURL = '';
     err = '';
+    info = null;
     if (!e) return;
     const ctrl = new AbortController();
     const { signal } = ctrl;
     const fail = (x: unknown) => {
       if (!signal.aborted) err = errorMessage(x);
     };
-    const k = kindOf(e);
-    if (k === 'text' && e.size <= TEXT_PREVIEW_MAX) {
-      fetch('/api/files/download' + qs({ path: e.path }), { credentials: 'same-origin', signal })
-        .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((t) => {
-          if (!signal.aborted) text = t;
-        })
-        .catch(fail);
-    } else if (k === 'pdf') {
-      post<{ url: string }>('/api/files/preview-url', { path: e.path }, { signal })
-        .then((r) => {
-          if (!signal.aborted) pdfURL = r.url;
-        })
-        .catch(fail);
-    }
+    get<FileInfo>('/api/files/info' + qs({ path: e.path }), { signal })
+      .then((i) => {
+        if (signal.aborted) return;
+        info = i;
+        const k = untrack(() => kind);
+        if (k === 'text' && e.size <= TEXT_PREVIEW_MAX) {
+          return fetch('/api/files/download' + qs({ path: e.path }), {
+            credentials: 'same-origin',
+            signal,
+          })
+            .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+            .then((t) => {
+              if (!signal.aborted) text = t;
+            });
+        } else if (k === 'pdf') {
+          return post<{ url: string }>('/api/files/preview-url', { path: e.path }, { signal }).then(
+            (r) => {
+              if (!signal.aborted) pdfURL = r.url;
+            }
+          );
+        }
+      })
+      .catch(fail);
     // Skipping on to another file cancels this one's download.
     return () => ctrl.abort();
   });
@@ -100,6 +124,12 @@
       >
       <button class="icon" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
     </header>
+    {#if info?.mismatch}
+      <p class="mismatch">
+        This file is not what its name suggests: its content is <strong>{info.mime}</strong>, not
+        {info.ext_mime}. It is shown as what it really is.
+      </p>
+    {/if}
     <div class="stage">
       {#if fileCount > 1}
         <button class="nav left" onclick={() => step(-1)} aria-label="Previous"
@@ -112,12 +142,20 @@
       <div class="content">
         {#if err}
           <div class="error">{err}</div>
-        {:else if kind === 'image' && isViewableImage(entry.mime)}
-          <img src={inlineURL} alt={entry.name} />
+        {:else if !info}
+          <p class="muted">Loading…</p>
+        {:else if kind === 'image' && isViewableImage(info.mime)}
+          {#key entryKey}
+            <ImageViewer src={inlineURL} alt={entry.name} />
+          {/key}
         {:else if kind === 'video' || kind === 'audio'}
           {#key entry.path}
-            <MediaPlayer path={entry.path} mime={entry.mime || ''} />
+            <MediaPlayer path={entry.path} mime={info.mime} />
           {/key}
+        {:else if kind === 'model'}
+          <ModelViewer url={downloadURL} mime={info.mime} size={entry.size} />
+        {:else if kind === 'archive' && info.archive}
+          <ArchiveView path={entry.path} summary={info.archive} />
         {:else if kind === 'pdf'}
           {#if pdfURL}
             <iframe src={pdfURL} title={entry.name}></iframe>
@@ -125,7 +163,10 @@
             <p class="muted">Loading…</p>
           {/if}
         {:else if kind === 'text' && entry.size <= TEXT_PREVIEW_MAX}
-          {#if text === null}<p class="muted">Loading…</p>{:else}<pre>{text}</pre>{/if}
+          {#if text === null}<p class="muted">Loading…</p>{:else}<CodeView
+              name={entry.name}
+              {text}
+            />{/if}
         {:else}
           <div class="none">
             <Icon name="file" size={64} />
@@ -171,10 +212,12 @@
     justify-content: center;
     min-height: 0;
   }
-  img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
+  .mismatch {
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    background: #6b4e00;
+    color: #fff;
+    font-size: 0.9rem;
   }
   iframe {
     width: 100%;
@@ -182,19 +225,6 @@
     border: none;
     background: #fff;
     border-radius: 4px;
-  }
-  pre {
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    margin: 0;
-    padding: 1rem;
-    background: var(--surface);
-    color: var(--text);
-    border-radius: var(--radius);
-    font-size: 0.85rem;
-    white-space: pre-wrap;
-    word-break: break-word;
   }
   .content :global(.player) {
     max-width: 1200px;

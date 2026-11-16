@@ -279,6 +279,9 @@ func (s *Server) cleanup(ctx context.Context) {
 	if _, err := s.store.DeleteSharesExpiredBefore(ctx, now.AddDate(0, 0, -30)); err != nil {
 		slog.Error("share cleanup", "err", err)
 	}
+	if err := s.store.DeleteFileTypesBefore(ctx, now.AddDate(0, 0, -90)); err != nil {
+		slog.Error("file type cleanup", "err", err)
+	}
 	s.uploads.Cleanup(24 * time.Hour)
 	s.pending.gc()
 	s.webauthn.GC()

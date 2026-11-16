@@ -178,12 +178,18 @@ importers:
 
   .:
     dependencies:
+      highlight.js:
+        specifier: ^11.12.0
+        version: 11.12.0
       hls.js:
         specifier: ^1.7.4
         version: 1.7.4
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
+      three:
+        specifier: ^0.187.0
+        version: 0.187.0
       tus-js-client:
         specifier: ^4.3.1
         version: 4.3.1
@@ -206,6 +212,9 @@ importers:
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
+      '@types/three':
+        specifier: ^0.187.0
+        version: 0.187.0
       eslint:
         specifier: ^10.14.0
         version: 10.14.0
@@ -256,6 +265,9 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@dimforge/rapier3d-compat@0.12.0':
+    resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
   '@emnapi/core@2.0.0-beta.2':
     resolution: {integrity: sha512-MzCVoWtcg4Pm2B3je5mMvYMvj3MmBKw+fU7vbsJc9/iT8ip6/eYIHo/Dsm/mr+wsHB6SEyJDuxB09Yy6r/8+4A==}
@@ -525,6 +537,9 @@ packages:
       svelte: ^5.46.4
       vite: ^8.0.0-beta.7 || ^8.0.0
 
+  '@tweenjs/tween.js@23.1.3':
+    resolution: {integrity: sha512-vJmvvwFxYuGnF2axRtPYocag6Clbb5YS7kLL+SO/TeVFzHqDIWrNKYtcsPMibjDx9O+bu+psAy9NKfWklassUA==}
+
   '@tybys/wasm-util@0.10.4':
     resolution: {integrity: sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A==}
 
@@ -548,6 +563,15 @@ packages:
 
   '@types/qrcode@1.5.6':
     resolution: {integrity: sha512-te7NQcV2BOvdj2b1hCAHzAoMNuj65kNBMz0KBaxM6c3VGBOhU0dURQKOtH8CFNI/dsKkwlv32p26qYQTWoB5bw==}
+
+  '@types/stats.js@0.17.4':
+    resolution: {integrity: sha512-jIBvWWShCvlBqBNIZt0KAshWpvSjhkwkEu4ZUcASoAvhmrgAUI2t1dXrjSL4xXVLB4FznPrIsX3nKXFl/Dt4vA==}
+
+  '@types/three@0.187.0':
+    resolution: {integrity: sha512-v+vKNarUtk4n2QRZ4+CN5ygMM0ARUjXjIQl0R/unMUfmStFeVqGbgqarbrpoGTXRZoulSH16ePrVJVxPJEbMUA==}
+
+  '@types/webxr@0.5.24':
+    resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
 
   '@typescript-eslint/eslint-plugin@8.72.2':
     resolution: {integrity: sha512-222PKFXKihmFpi/pS5njoBgdAqsPhj2/GBmFbrNw8Tq8gEG9Sv+kSlKFy4u2q+mJv9ZzJgM2Gkv/bUzRZwZw5g==}
@@ -884,6 +908,9 @@ packages:
       picomatch:
         optional: true
 
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
   file-entry-cache@11.1.5:
     resolution: {integrity: sha512-+PFTHITI08JIGhnNpGNI8T8inUpgZfk3GNEqfT9R2zZV2iFXg3CvqzSl/uEhs7TSGujYRELEANyDvS8Fj7+S7Q==}
 
@@ -932,6 +959,10 @@ packages:
   hashery@1.5.1:
     resolution: {integrity: sha512-iZyKG96/JwPz1N55vj2Ie2vXbhu440zfUfJvSwEqEbeLluk7NnapfGqa7LH0mOsnDxTF85Mx8/dyR6HfqcbmbQ==}
     engines: {node: '>=20'}
+
+  highlight.js@11.12.0:
+    resolution: {integrity: sha512-nbfWpyRMcMrPMmDwJB+dhX/eiaPKtc2RB+0QZskqJ3WjRA/FDS0e9hZrx8EC/lbEv8gXy98FcDbNa/dspAaJMg==}
+    engines: {node: '>=12.0.0'}
 
   hls.js@1.7.4:
     resolution: {integrity: sha512-3GlxGdPvT2YHvQYOt+yOzT/DEior/qJVNIylHA77kgeoBTdQQqi70GwefNEUmHQeNGyjC8U62+bruqW/Tpm+tg==}
@@ -1116,6 +1147,9 @@ packages:
 
   magic-string@1.4.5:
     resolution: {integrity: sha512-oLLC2+YvQUfAa+vxoufE/yc1icb87M9iXIRqAoR/2EhE/8cb3SF/+Gi0c2By1B+5Vz2e2vQtUvHiu1+63Znh+w==}
+
+  meshoptimizer@1.1.1:
+    resolution: {integrity: sha512-oRFNWJRDA/WTrVj7NWvqa5HqE1t9MYDj2VaWirQCzCCrAd2GHrqR/sQezCxiWATPNlKTcRaPRHPJwIRoPBAp5g==}
 
   minimatch@11.0.8:
     resolution: {integrity: sha512-nFQuYSTVrGvysVBps5Ih+0BdnYFN/Cj3C816r6+p7yK+FHrVLGE4O4N9AFwykrlNlvM2HYt+Rad1Uiro6h88Ig==}
@@ -1358,6 +1392,9 @@ packages:
     resolution: {integrity: sha512-5mAftM3SoDV9X0zdF386F9p2pv8iKOwi/KfBS1XnBAkVCKFzVOLHUoa8iGWAt4buoicLmyWVRpuuD5wplXOQsg==}
     engines: {node: '>=18'}
 
+  three@0.187.0:
+    resolution: {integrity: sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==}
+
   tinybench@6.2.3:
     resolution: {integrity: sha512-Al01C2JIBnO2CXCAPbpAl6sUiOZHeThGtHYNTa51JRw9PyWOCdr+9Ong05R4qg/Sk3+H645E8ov1h2c58ityNw==}
     engines: {node: '>=20.0.0'}
@@ -1570,6 +1607,8 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
+  '@dimforge/rapier3d-compat@0.12.0': {}
+
   '@emnapi/core@2.0.0-beta.2':
     dependencies:
       '@emnapi/wasi-threads': 2.2.0
@@ -1778,6 +1817,8 @@ snapshots:
       vite: 8.3.8(@types/node@26.6.6)
       vitefu: 1.1.3(vite@8.3.8(@types/node@26.6.6))
 
+  '@tweenjs/tween.js@23.1.3': {}
+
   '@tybys/wasm-util@0.10.4':
     dependencies:
       tslib: 2.9.1
@@ -1803,6 +1844,19 @@ snapshots:
   '@types/qrcode@1.5.6':
     dependencies:
       '@types/node': 26.6.6
+
+  '@types/stats.js@0.17.4': {}
+
+  '@types/three@0.187.0':
+    dependencies:
+      '@dimforge/rapier3d-compat': 0.12.0
+      '@tweenjs/tween.js': 23.1.3
+      '@types/stats.js': 0.17.4
+      '@types/webxr': 0.5.24
+      fflate: 0.8.3
+      meshoptimizer: 1.1.1
+
+  '@types/webxr@0.5.24': {}
 
   '@typescript-eslint/eslint-plugin@8.72.2(@typescript-eslint/parser@8.72.2(eslint@10.14.0)(typescript@6.0.3))(eslint@10.14.0)(typescript@6.0.3)':
     dependencies:
@@ -2160,6 +2214,8 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
+  fflate@0.8.3: {}
+
   file-entry-cache@11.1.5:
     dependencies:
       flat-cache: 6.1.23
@@ -2202,6 +2258,8 @@ snapshots:
   hashery@1.5.1:
     dependencies:
       hookified: 1.15.1
+
+  highlight.js@11.12.0: {}
 
   hls.js@1.7.4: {}
 
@@ -2344,6 +2402,8 @@ snapshots:
   magic-string@1.4.5:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  meshoptimizer@1.1.1: {}
 
   minimatch@11.0.8:
     dependencies:
@@ -2574,6 +2634,8 @@ snapshots:
       zimmerframe: 1.1.5
     transitivePeerDependencies:
       - '@typescript-eslint/types'
+
+  three@0.187.0: {}
 
   tinybench@6.2.3: {}
 

@@ -456,7 +456,7 @@ func TestFileOpsAndTrash(t *testing.T) {
 func TestSharesEndToEnd(t *testing.T) {
 	h := newHarness(t)
 	h.user("dave", "user", store.Grant{Path: "dave", Permission: "write"})
-	write(t, h.root, "dave/album/song.flac", "flacdata")
+	write(t, h.root, "dave/album/song.flac", "fLaCdata")
 	write(t, h.root, "dave/album/cover.jpg", "jpg")
 	write(t, h.root, "dave/private.txt", "private")
 	c := h.login("dave")
@@ -492,7 +492,7 @@ func TestSharesEndToEnd(t *testing.T) {
 	}
 	rec = s.do("GET", "/s/"+token+"/file?path=song.flac&inline=1", nil)
 	expect(t, rec, 200)
-	if rec.Body.String() != "flacdata" || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "inline") {
+	if rec.Body.String() != "fLaCdata" || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "inline") {
 		t.Fatalf("inline flac: %v", rec.Header())
 	}
 	expect(t, s.do("GET", "/s/"+token+"/file?path=cover.jpg", nil), 200) // same browser: counted once

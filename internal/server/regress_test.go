@@ -440,3 +440,41 @@ func TestOIDCLinkNeedsFreshLiveSession(t *testing.T) {
 		t.Fatal("link completed after the session was revoked")
 	}
 }
+
+// What renders inline is decided by content: a page named like an image is
+// served as a download, and the info endpoint reports what the file is.
+func TestTypeComesFromContentNotName(t *testing.T) {
+	h := newHarness(t)
+	h.user("kai", "admin")
+	write(t, h.root, "evil.jpg", "<script>alert(1)</script>")
+	write(t, h.root, "real.png", "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	write(t, h.root, "noext", "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	c := h.login("kai")
+	rec := c.do("GET", "/api/files/download?inline=1&path=evil.jpg", nil)
+	if ct := rec.Header().Get("Content-Type"); ct != "application/octet-stream" ||
+		!strings.HasPrefix(rec.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("script named .jpg served inline: %s %s", ct, rec.Header().Get("Content-Disposition"))
+	}
+	rec = c.do("GET", "/api/files/download?inline=1&path=noext", nil)
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("extensionless png served as %s", ct)
+	}
+	for range 2 { // the second answer comes from the cache
+		info := decode[map[string]any](t, c.do("GET", "/api/files/info?path=evil.jpg", nil))
+		if info["mime"] != "text/html" || info["mismatch"] != true || info["ext_mime"] != "image/jpeg" {
+			t.Fatalf("info: %v", info)
+		}
+	}
+	// Replaced content is sniffed again.
+	write(t, h.root, "evil.jpg", "\xff\xd8\xff\xe0 now a real jpeg header")
+	if info := decode[map[string]any](t, c.do("GET", "/api/files/info?path=evil.jpg", nil)); info["mime"] != "image/jpeg" || info["mismatch"] == true {
+		t.Fatalf("info after replacing: %v", info)
+	}
+	list := decode[map[string]any](t, c.do("GET", "/api/files?path=", nil))
+	for _, e := range list["entries"].([]any) {
+		if e := e.(map[string]any); e["name"] == "noext" && e["mime"] != "image/png" {
+			t.Fatalf("extensionless file listed as %v", e["mime"])
+		}
+	}
+	expect(t, c.do("GET", "/api/files/archive?path=real.png", nil), 422)
+}

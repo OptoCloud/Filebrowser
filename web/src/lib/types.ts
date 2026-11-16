@@ -64,6 +64,35 @@ export interface Entry {
   mime?: string;
 }
 
+export interface ArchiveEntry {
+  name: string;
+  size: number;
+  is_dir?: boolean;
+  mtime: string;
+  encrypted?: boolean;
+}
+
+/** What an archive holds; `entries` is absent in the summary a FileInfo carries. */
+export interface ArchiveIndex {
+  format: string;
+  /** Whether a password is needed, and for what. */
+  encrypted: 'no' | 'entries' | 'headers' | 'unknown';
+  listable: boolean;
+  count: number;
+  truncated?: boolean;
+  entries?: ArchiveEntry[];
+}
+
+/** A file's type as the server verified it from the content. */
+export interface FileInfo {
+  mime: string;
+  text: boolean;
+  /** The name claims a different kind of file than the content is. */
+  mismatch: boolean;
+  ext_mime: string;
+  archive?: ArchiveIndex;
+}
+
 export interface Listing {
   path: string;
   permission: Perm;

@@ -50,6 +50,8 @@ func (s *Server) routes() {
 	s.handle("POST /api/files/move", s.handleMove)
 	s.handle("POST /api/files/delete", s.handleDelete)
 	s.handle("POST /api/files/preview-url", s.handlePreviewURL)
+	s.handle("GET /api/files/info", s.handleFileInfo)
+	s.handle("GET /api/files/archive", s.handleArchiveIndex)
 	s.handle("GET /api/search", s.handleSearch)
 	s.handle("GET /api/thumb", s.handleThumb)
 	s.handle("GET /api/trash", s.handleTrashList)
