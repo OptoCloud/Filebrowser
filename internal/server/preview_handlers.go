@@ -42,7 +42,7 @@ func (s *Server) inspect(ctx context.Context, p string) (*fileInfo, error) {
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	t, err := files.VerifyFile(fi.Name(), f)
+	t, err := files.VerifyFile(fi.Name(), f, fi.Size())
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func (s *Server) handleArchiveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	t, err := files.VerifyFile(fi.Name(), f)
+	t, err := files.VerifyFile(fi.Name(), f, fi.Size())
 	if err != nil {
 		httpx.FileError(w, r, err)
 		return

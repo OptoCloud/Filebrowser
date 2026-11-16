@@ -1,12 +1,8 @@
 <script lang="ts">
-  import { formatSize } from '#lib/format.js';
-
-  // A 3D model (Wavefront OBJ or Autodesk FBX) on an orbitable stage. The
+  // A 3D model (Wavefront OBJ, Autodesk FBX or STL) on an orbitable stage. The
   // format comes from the server's check of the file's content, not its name.
-  let { url, mime, size }: { url: string; mime: string; size: number } = $props();
-
-  /** Larger models are not loaded into the page. */
-  const MAX = 150 * 1024 * 1024;
+  // Whether a model is small enough to load is the caller's decision.
+  let { url, mime }: { url: string; mime: string } = $props();
 
   let canvas = $state<HTMLCanvasElement>();
   let status = $state('Loading model…');
@@ -22,10 +18,6 @@
     if (!el) return;
     failed = '';
     status = 'Loading model…';
-    if (size > MAX) {
-      failed = `This model is too large to preview (${formatSize(size)}).`;
-      return;
-    }
     const ctrl = new AbortController();
     let dispose = () => {};
     (async () => {
@@ -46,6 +38,10 @@
       if (m === 'model/obj') {
         const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
         object = new OBJLoader(manager).parse(new TextDecoder().decode(data));
+      } else if (m === 'model/stl') {
+        // STL is one bare mesh, in either its text or its binary form.
+        const { STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js');
+        object = new THREE.Mesh(new STLLoader(manager).parse(data));
       } else {
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
         object = new FBXLoader(manager).parse(data, '');
@@ -74,7 +70,7 @@
         if (!g.attributes.normal) g.computeVertexNormals();
         triangles += (g.index ? g.index.count : g.attributes.position.count) / 3;
         // OBJ without a material library gets one plain material; FBX keeps its own.
-        if (m === 'model/obj') mesh.material = fallback;
+        if (m !== 'application/vnd.autodesk.fbx') mesh.material = fallback;
         for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material])
           materials.add(mat);
       });

@@ -25,6 +25,8 @@
   });
 
   const a = $derived(index ?? summary);
+  // A Unity package is listed by the project paths of its assets.
+  const unity = $derived(a.format === 'unitypackage');
   const protection = $derived(
     {
       headers: 'Password protected: even the list of files is encrypted.',
@@ -37,12 +39,17 @@
 
 <div class="archive">
   <div class="bar">
-    <strong>{a.format.toUpperCase()} archive</strong>
+    <strong>{unity ? 'Unity package' : a.format.toUpperCase() + ' archive'}</strong>
     {#if index}
       <span class="muted small"
         >{index.truncated ? `first ${index.entries?.length ?? 0} of ` : ''}{index.count}
-        {index.count === 1 ? 'entry' : 'entries'}{index.truncated &&
-        index.count <= (index.entries?.length ?? 0)
+        {unity
+          ? index.count === 1
+            ? 'asset'
+            : 'assets'
+          : index.count === 1
+            ? 'entry'
+            : 'entries'}{index.truncated && index.count <= (index.entries?.length ?? 0)
           ? ' or more'
           : ''}</span
       >

@@ -56,7 +56,7 @@ export type Kind =
   'dir' | 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'archive' | 'model' | 'file';
 
 /** 3D model types the viewer can draw. */
-export const MODEL_TYPES = ['model/obj', 'application/vnd.autodesk.fbx'];
+export const MODEL_TYPES = ['model/obj', 'application/vnd.autodesk.fbx', 'model/stl'];
 
 export function kindOf(e: { is_dir: boolean; mime?: string }): Kind {
   if (e.is_dir) return 'dir';
@@ -104,4 +104,27 @@ export function thumbable(e: { is_dir: boolean; mime?: string }): boolean {
   );
 }
 
-export const TEXT_PREVIEW_MAX = 1024 * 1024;
+const MB = 1024 * 1024;
+
+/**
+ * Previews that load a whole file into the page. Up to `auto` bytes they
+ * open on their own; above that the viewer asks first; above `max` there is
+ * no preview.
+ */
+export const PREVIEW_LIMITS: Partial<Record<Kind, { auto: number; max: number; why: string }>> = {
+  text: {
+    auto: MB,
+    max: 32 * MB,
+    why: 'Large text files can make the page slow, and are shown without highlighting.',
+  },
+  model: {
+    auto: 32 * MB,
+    max: 1024 * MB,
+    why: 'Showing a 3D model downloads the whole file and needs several times its size in memory.',
+  },
+  image: {
+    auto: 64 * MB,
+    max: Infinity,
+    why: 'Showing an image this large downloads the whole file.',
+  },
+};

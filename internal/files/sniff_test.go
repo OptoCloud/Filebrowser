@@ -51,6 +51,25 @@ func TestVerify(t *testing.T) {
 			t.Errorf("Verify(%q, %q) = %+v; want mime %s text %v mismatch %v", c.name, c.head, got, c.mime, c.text, c.mismatch)
 		}
 	}
+	// STL: the ASCII form by its text, the binary form by its size.
+	ascii := "solid part\n facet normal 0 0 1\n  outer loop\n"
+	if got := Verify("a.stl", []byte(ascii)); got.Mime != MimeSTL || !got.Text || got.Mismatch {
+		t.Errorf("ascii stl: %+v", got)
+	}
+	bin := make([]byte, 84+2*50)
+	copy(bin, "solid exported by some CAD tool") // binary files often start like ASCII ones
+	bin[80] = 2
+	bin[90], bin[130] = 0x80, 0xff
+	if got := VerifySize("a.stl", bin, int64(len(bin))); got.Mime != MimeSTL || got.Text || got.Mismatch {
+		t.Errorf("binary stl: %+v", got)
+	}
+	if got := VerifySize("mesh", bin, int64(len(bin))); got.Mime != MimeSTL || got.Mismatch {
+		t.Errorf("binary stl without extension: %+v", got)
+	}
+	if got := VerifySize("a.stl", bin, int64(len(bin))+7); got.Mime == MimeSTL || !got.Mismatch {
+		t.Errorf("stl of the wrong size: %+v", got)
+	}
+
 	// Nothing that is not what it claims may be rendered inline as an image.
 	if InlineSafe(Verify("photo.jpg", []byte("<script>alert(1)</script>")).Mime, false) {
 		t.Error("script named .jpg is inline-safe")
@@ -92,6 +111,39 @@ func TestInspectArchive(t *testing.T) {
 	if err != nil || a.Format != "tar.gz" || a.Count != 1 || a.Entries[0].Name != "x/y.txt" || a.Entries[0].Size != 3 {
 		t.Fatalf("tar.gz: %+v, %v", a, err)
 	}
+	// A Unity package is indexed by the project paths of its assets.
+	var ub bytes.Buffer
+	gz = gzip.NewWriter(&ub)
+	tw = tar.NewWriter(gz)
+	put := func(name, data string) {
+		tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)), Mode: 0o644})
+		tw.Write([]byte(data))
+	}
+	tw.WriteHeader(&tar.Header{Name: "./", Typeflag: tar.TypeDir})
+	g1, g2 := "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"
+	tw.WriteHeader(&tar.Header{Name: "./" + g1 + "/", Typeflag: tar.TypeDir})
+	put("./"+g1+"/asset", "fbx bytes!")
+	put("./"+g1+"/asset.meta", "guid: x")
+	put("./"+g1+"/pathname", "Assets/Models/ship.fbx\n00")
+	put("./"+g1+"/preview.png", "png")
+	put(g2+"/asset.meta", "folderAsset: yes")
+	put(g2+"/pathname", "Assets/Models")
+	tw.Close()
+	gz.Close()
+	rd := func() *bytes.Reader { return bytes.NewReader(ub.Bytes()) }
+	a, err = InspectArchive(ctx, rd(), int64(ub.Len()), "application/gzip", 100)
+	if err != nil || a.Format != "unitypackage" || a.Count != 2 || len(a.Entries) != 2 || a.Truncated ||
+		a.Entries[0].Name != "Assets/Models" || !a.Entries[0].IsDir ||
+		a.Entries[1].Name != "Assets/Models/ship.fbx" || a.Entries[1].Size != 10 || a.Entries[1].IsDir {
+		t.Fatalf("unitypackage: %+v, %v", a, err)
+	}
+	if a, _ = InspectArchive(ctx, rd(), int64(ub.Len()), "application/gzip", 0); a.Format != "unitypackage" {
+		t.Fatalf("unitypackage summary: %+v", a)
+	}
+	if a, _ = InspectArchive(ctx, rd(), int64(ub.Len()), "application/gzip", 1); len(a.Entries) != 1 || !a.Truncated || a.Format != "unitypackage" {
+		t.Fatalf("unitypackage limit: %+v", a)
+	}
+
 	// A gzip that holds no tar is not an archive.
 	var pb bytes.Buffer
 	gz = gzip.NewWriter(&pb)

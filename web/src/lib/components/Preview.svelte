@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { errorMessage, get, post, qs } from '#lib/api.js';
   import { modal } from '#lib/dialog.js';
-  import { TEXT_PREVIEW_MAX, formatSize, isViewableImage, kindOf } from '#lib/format.js';
+  import { PREVIEW_LIMITS, formatSize, isViewableImage, kindOf } from '#lib/format.js';
   import type { Entry, FileInfo } from '#lib/types.js';
   import ArchiveView from './ArchiveView.svelte';
   import CodeView from './CodeView.svelte';
@@ -45,6 +45,13 @@
   let pdfURL = $state('');
   let err = $state('');
 
+  // Some previews load the whole file into the page. Large ones wait for
+  // the user to ask, and say why they did not open on their own.
+  let asked = $state(false);
+  const limit = $derived(PREVIEW_LIMITS[kind]);
+  const tooLarge = $derived(!!entry && !!limit && entry.size > limit.max);
+  const waiting = $derived(!!entry && !!limit && !tooLarge && entry.size > limit.auto && !asked);
+
   // The file was deleted or moved away by a reload.
   $effect(() => {
     if (!entry) onclose();
@@ -57,6 +64,7 @@
     pdfURL = '';
     err = '';
     info = null;
+    asked = false;
     if (!e) return;
     const ctrl = new AbortController();
     const { signal } = ctrl;
@@ -67,17 +75,7 @@
       .then((i) => {
         if (signal.aborted) return;
         info = i;
-        const k = untrack(() => kind);
-        if (k === 'text' && e.size <= TEXT_PREVIEW_MAX) {
-          return fetch('/api/files/download' + qs({ path: e.path }), {
-            credentials: 'same-origin',
-            signal,
-          })
-            .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-            .then((t) => {
-              if (!signal.aborted) text = t;
-            });
-        } else if (k === 'pdf') {
+        if (untrack(() => kind) === 'pdf') {
           return post<{ url: string }>('/api/files/preview-url', { path: e.path }, { signal }).then(
             (r) => {
               if (!signal.aborted) pdfURL = r.url;
@@ -87,6 +85,24 @@
       })
       .catch(fail);
     // Skipping on to another file cancels this one's download.
+    return () => ctrl.abort();
+  });
+
+  // Text is fetched once it may be shown: at once if small, else when asked.
+  $effect(() => {
+    if (!info || kind !== 'text' || waiting || tooLarge) return;
+    const e = untrack(() => entry);
+    if (!e) return;
+    const ctrl = new AbortController();
+    const { signal } = ctrl;
+    fetch('/api/files/download' + qs({ path: e.path }), { credentials: 'same-origin', signal })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((t) => {
+        if (!signal.aborted) text = t;
+      })
+      .catch((x) => {
+        if (!signal.aborted) err = errorMessage(x);
+      });
     return () => ctrl.abort();
   });
 
@@ -144,6 +160,28 @@
           <div class="error">{err}</div>
         {:else if !info}
           <p class="muted">Loading…</p>
+        {:else if limit && (waiting || tooLarge) && (kind !== 'image' || isViewableImage(info.mime))}
+          <div class="none">
+            <Icon name={kind === 'image' ? 'image' : 'file'} size={64} />
+            {#if tooLarge}
+              <p>This file is too large to preview ({formatSize(entry.size)}).</p>
+            {:else}
+              <p>
+                This preview was not loaded automatically because the file is large ({formatSize(
+                  entry.size
+                )}).
+              </p>
+            {/if}
+            <p class="muted small">{limit.why}</p>
+            <p class="actions">
+              {#if !tooLarge}
+                <button class="primary" onclick={() => (asked = true)}>Load preview</button>
+              {/if}
+              <a class="btn" href={downloadURL} rel="external" download
+                ><Icon name="download" size={16} />Download</a
+              >
+            </p>
+          </div>
         {:else if kind === 'image' && isViewableImage(info.mime)}
           {#key entryKey}
             <ImageViewer src={inlineURL} alt={entry.name} />
@@ -153,7 +191,7 @@
             <MediaPlayer path={entry.path} mime={info.mime} />
           {/key}
         {:else if kind === 'model'}
-          <ModelViewer url={downloadURL} mime={info.mime} size={entry.size} />
+          <ModelViewer url={downloadURL} mime={info.mime} />
         {:else if kind === 'archive' && info.archive}
           <ArchiveView path={entry.path} summary={info.archive} />
         {:else if kind === 'pdf'}
@@ -162,7 +200,7 @@
           {:else}
             <p class="muted">Loading…</p>
           {/if}
-        {:else if kind === 'text' && entry.size <= TEXT_PREVIEW_MAX}
+        {:else if kind === 'text'}
           {#if text === null}<p class="muted">Loading…</p>{:else}<CodeView
               name={entry.name}
               {text}
@@ -255,6 +293,12 @@
   }
   .none {
     text-align: center;
+    max-width: 32rem;
+  }
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
   }
   @media (max-width: 640px) {
     .stage {

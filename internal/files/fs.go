@@ -189,7 +189,7 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 		// their content, so they get the right icon and viewer.
 		if !e.IsDir && path.Ext(name) == "" && fi.Mode().IsRegular() && fi.Mode()&fs.ModeSymlink == 0 {
 			if file, err := openIn(d, name, fi); err == nil {
-				if t, err := VerifyFile(name, file); err == nil {
+				if t, err := VerifyFile(name, file, fi.Size()); err == nil {
 					e.Mime = t.Mime
 				}
 				_ = file.Close()

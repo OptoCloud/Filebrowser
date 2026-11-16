@@ -10,13 +10,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"time"
 )
 
 // Archive describes an archive file without extracting anything from it.
 type Archive struct {
-	// Format is zip, tar, tar.gz, tar.bz2, 7z or rar.
+	// Format is zip, tar, tar.gz, tar.bz2, 7z, rar or unitypackage (whose
+	// entries are the project paths of its assets).
 	Format string `json:"format"`
 	// Encrypted says whether a password is needed: "no", "entries" (the
 	// index is readable, some or all contents are not), "headers" (not even
@@ -155,32 +157,141 @@ func inspectTar(ctx context.Context, r io.Reader, format string, limit int) (*Ar
 	tr := tar.NewReader(ctxReader{ctx, r})
 	if limit == 0 {
 		// Summary only: confirm it is a tar, without walking it.
-		if _, err := tr.Next(); err != nil && err != io.EOF {
+		h, err := tr.Next()
+		for err == nil && tarName(h) == "" {
+			h, err = tr.Next()
+		}
+		if err != nil && err != io.EOF {
 			return nil, ErrBadArchive
+		}
+		if err == nil {
+			if _, _, ok := unityMember(tarName(h)); ok {
+				a.Format = unityFormat
+			}
 		}
 		a.Truncated = true
 		return a, nil
 	}
+	// A Unity package is a tar.gz of one directory per asset, named by the
+	// asset's GUID; it is recognised by that shape and indexed by the paths
+	// its assets have in a project, not by GUID. While every member fits
+	// the shape, the walk goes on past limit members: an asset is several.
+	unity := unityAssets{}
 	for {
 		h, err := tr.Next()
-		if err == io.EOF {
-			return a, nil
-		}
 		if err != nil {
-			if a.Count == 0 && ctx.Err() == nil {
-				return nil, ErrBadArchive // e.g. a .gz that holds something else
+			if err != io.EOF {
+				if a.Count == 0 && ctx.Err() == nil {
+					return nil, ErrBadArchive // e.g. a .gz that holds something else
+				}
+				a.Truncated = true // deadline, scan limit, or a damaged archive
 			}
-			a.Truncated = true // deadline, scan limit, or a damaged archive
-			return a, nil
+			break
+		}
+		name := tarName(h)
+		if name == "" {
+			continue
 		}
 		a.Count++
-		if len(a.Entries) >= limit {
-			a.Truncated = true
-			return a, nil
+		if unity != nil {
+			if guid, member, ok := unityMember(name); !ok {
+				unity = nil
+			} else if a.Count > 6*limit {
+				a.Truncated = true
+				break
+			} else {
+				unity.add(guid, member, h, tr)
+			}
 		}
-		a.Entries = append(a.Entries, ArchiveEntry{Name: strings.ToValidUTF8(h.Name, "�"), Size: h.Size,
-			IsDir: h.Typeflag == tar.TypeDir, ModTime: h.ModTime.UTC()})
+		if len(a.Entries) < limit {
+			a.Entries = append(a.Entries, ArchiveEntry{Name: strings.ToValidUTF8(name, "\ufffd"), Size: h.Size,
+				IsDir: h.Typeflag == tar.TypeDir, ModTime: h.ModTime.UTC()})
+		} else if unity == nil {
+			a.Truncated = true
+			break
+		}
 	}
+	if entries := unity.entries(); len(entries) > 0 {
+		a.Format, a.Count = unityFormat, len(entries)
+		if len(entries) > limit {
+			entries, a.Truncated = entries[:limit], true
+		}
+		a.Entries = entries
+	} else if len(a.Entries) < a.Count {
+		a.Truncated = true
+	}
+	return a, nil
+}
+
+// tarName is a member's name without the "./" some writers put in front;
+// the archive's own root directory is "".
+func tarName(h *tar.Header) string {
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(h.Name, "./"), "/"), "/")
+}
+
+const unityFormat = "unitypackage"
+
+// A Unity package holds, for each asset, a directory named by its GUID with:
+//
+//	pathname    the asset's path in the project ("Assets/Models/ship.fbx")
+//	asset       its content; absent for a folder
+//	asset.meta  its import settings
+//	preview.png an optional thumbnail
+type unityAsset struct {
+	path    string
+	size    int64
+	mtime   time.Time
+	content bool
+}
+
+type unityAssets map[string]*unityAsset
+
+// unityMember splits "<guid>" or "<guid>/<member>" and reports whether name
+// has the shape of a Unity package member.
+func unityMember(name string) (guid, member string, ok bool) {
+	guid, member, _ = strings.Cut(name, "/")
+	if len(guid) != 32 || strings.Trim(guid, "0123456789abcdef") != "" {
+		return "", "", false
+	}
+	switch member {
+	case "", "asset", "asset.meta", "pathname", "preview.png", "metaData":
+		return guid, member, true
+	}
+	return "", "", false
+}
+
+func (u unityAssets) add(guid, member string, h *tar.Header, content io.Reader) {
+	as := u[guid]
+	if as == nil {
+		as = &unityAsset{}
+		u[guid] = as
+	}
+	switch member {
+	case "asset":
+		as.content, as.size, as.mtime = true, h.Size, h.ModTime.UTC()
+	case "pathname":
+		// The path is the first line; some versions add a second.
+		buf := make([]byte, 4096)
+		n, _ := io.ReadFull(content, buf)
+		line, _, _ := strings.Cut(string(buf[:n]), "\n")
+		as.path = strings.ToValidUTF8(strings.TrimSpace(line), "\ufffd")
+		if as.mtime.IsZero() {
+			as.mtime = h.ModTime.UTC()
+		}
+	}
+}
+
+// entries lists the assets by project path; it is empty unless u looks like
+// a package (nil when a member did not fit).
+func (u unityAssets) entries() []ArchiveEntry {
+	var out []ArchiveEntry
+	for _, as := range u {
+		if as.path != "" {
+			out = append(out, ArchiveEntry{Name: as.path, Size: as.size, IsDir: !as.content, ModTime: as.mtime})
+		}
+	}
+	slices.SortFunc(out, func(a, b ArchiveEntry) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 // aesCoder is the 7z coder id of AES-256 + SHA-256, which marks the streams

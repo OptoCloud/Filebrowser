@@ -2,6 +2,7 @@ package files
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"path"
 	"strings"
@@ -36,6 +37,7 @@ const (
 	MimeSTEP = "model/step"
 	MimeFBX  = "application/vnd.autodesk.fbx"
 	MimeOBJ  = "model/obj"
+	MimeSTL  = "model/stl"
 )
 
 type signature struct {
@@ -190,6 +192,10 @@ func sniffText(head []byte) string {
 	if looksLikeOBJ(s) {
 		return MimeOBJ
 	}
+	// ASCII STL: "solid <name>" followed by facets.
+	if strings.HasPrefix(lower, "solid") && (strings.Contains(lower, "facet") || strings.Contains(lower, "endsolid")) {
+		return MimeSTL
+	}
 	return "text/plain"
 }
 
@@ -260,15 +266,34 @@ var sniffable = func() map[string]bool {
 var textTypes = map[string]bool{
 	"application/json": true, "application/xml": true, "application/x-subrip": true, "image/svg+xml": true,
 	"application/javascript": true, "application/x-sh": true, "application/toml": true, "application/yaml": true,
-	"application/x-yaml": true, "application/sql": true, MimeOBJ: true, MimeSTEP: true, MimeFBX: true,
+	"application/x-yaml": true, "application/sql": true, MimeOBJ: true, MimeSTEP: true, MimeFBX: true, MimeSTL: true,
 }
 
 // IsTextType reports whether files of type t are text.
 func IsTextType(t string) bool { return strings.HasPrefix(t, "text/") || textTypes[t] }
 
-// Verify decides what a file is from its first bytes and its name.
-func Verify(name string, head []byte) Type {
+// isBinarySTL recognises binary STL, which has no magic: an 80-byte header of
+// anything, a triangle count, and exactly 50 bytes per triangle. The file
+// size has to agree with the count.
+func isBinarySTL(head []byte, size int64) bool {
+	if len(head) < 84 || size < 84+50 {
+		return false
+	}
+	return size == 84+50*int64(binary.LittleEndian.Uint32(head[80:84]))
+}
+
+// Verify decides what a file is from its first bytes and its name. Formats
+// that can only be told with the file's size (binary STL) need VerifySize.
+func Verify(name string, head []byte) Type { return VerifySize(name, head, -1) }
+
+// VerifySize is Verify for a file of a known size.
+func VerifySize(name string, head []byte, size int64) Type {
 	claimed, sniffed := MimeType(name), Sniff(head)
+	// Checked before anything else: binary STL headers are free text and
+	// often start with "solid", like the ASCII form.
+	if (sniffed == octetStream || sniffed == MimeSTL) && isBinarySTL(head, size) {
+		return Type{Mime: MimeSTL, Mismatch: claimed != MimeSTL && claimed != octetStream}
+	}
 	switch {
 	case sniffed == claimed:
 		return Type{Mime: sniffed, Text: IsTextType(sniffed) && isText(head)}
@@ -310,14 +335,14 @@ func ambiguous(name string) bool {
 	return false
 }
 
-// VerifyFile is Verify for an open file; it reads the head without moving
-// the file offset.
-func VerifyFile(name string, f io.ReaderAt) (Type, error) {
+// VerifyFile is Verify for an open file of size bytes; it reads the head
+// without moving the file offset.
+func VerifyFile(name string, f io.ReaderAt, size int64) (Type, error) {
 	head, err := ReadHead(f)
 	if err != nil {
 		return Type{}, err
 	}
-	return Verify(name, head), nil
+	return VerifySize(name, head, size), nil
 }
 
 // ReadHead returns the first SniffLen bytes of f.

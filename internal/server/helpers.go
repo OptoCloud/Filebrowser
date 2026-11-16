@@ -61,7 +61,7 @@ func serveFile(w http.ResponseWriter, r *http.Request, fsys *files.FS, p string,
 	defer f.Close()
 	// What may render in a browser is decided by the content, never the name:
 	// a script named photo.jpg is not an image.
-	t, err := files.VerifyFile(fi.Name(), f)
+	t, err := files.VerifyFile(fi.Name(), f, fi.Size())
 	if err != nil {
 		httpx.FileError(w, r, err)
 		return
