@@ -241,5 +241,10 @@ func (s *Server) handleExternalURL(w http.ResponseWriter, r *http.Request) {
 	id := httpx.IdentityFrom(r.Context())
 	ttl := s.cfg.Media.ExternalURLTTL.Duration
 	link := shares.Link{UserID: id.User.ID, Session: id.Session.IDHash, Path: p, Variant: req.Variant, Expires: time.Now().Add(ttl).Unix()}
-	httpx.JSON(w, http.StatusOK, map[string]any{"url": s.shares.LinkURL(link, fi.Name()), "expires_at": time.Unix(link.Expires, 0).UTC()})
+	u, err := s.shares.LinkURL(link, fi.Name())
+	if err != nil {
+		httpx.FileError(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"url": u, "expires_at": time.Unix(link.Expires, 0).UTC()})
 }

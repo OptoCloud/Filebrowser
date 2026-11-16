@@ -355,7 +355,9 @@ func (s *Server) handleSignedLink(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		p, err = s.files.FS.Authorize(a, p, files.PermRead)
 	}
-	if err != nil {
+	// The link is for the file it was made for: one since uploaded, moved or
+	// restored to the same path is not served.
+	if err != nil || !s.shares.SameFile(link, p) {
 		httpx.Error(w, http.StatusNotFound, "link expired")
 		return
 	}

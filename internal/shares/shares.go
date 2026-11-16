@@ -276,6 +276,10 @@ type Link struct {
 	// any other end of that session) revokes the link too.
 	Session []byte `json:"s"`
 	Path    string `json:"p"`
+	// FileID is the identity of the file at Path when the link was made (see
+	// files.FS.FileID): the link is for that file, not for whatever is later
+	// uploaded or moved to the same path.
+	FileID  string `json:"f,omitempty"`
 	Variant string `json:"v,omitempty"`
 	Inline  bool   `json:"i,omitempty"`
 	Expires int64  `json:"e"`
@@ -310,9 +314,26 @@ func (s *Service) VerifyLink(tok string) (*Link, error) {
 	return &l, nil
 }
 
-// LinkURL builds the public URL for a signed link; the file name is appended
-// so external players show a sensible title.
-func (s *Service) LinkURL(l Link, name string) string {
+// LinkURL builds the public URL for a signed link to the file now at l.Path
+// (a real path); the file name is appended so external players show a
+// sensible title.
+func (s *Service) LinkURL(l Link, name string) (string, error) {
+	id, err := s.Files.FS.FileID(l.Path)
+	if err != nil {
+		return "", err
+	}
+	l.FileID = id
+	return s.linkURL(l, name), nil
+}
+
+// SameFile reports whether the file at the real path p is still the one l was
+// made for.
+func (s *Service) SameFile(l *Link, p string) bool {
+	id, err := s.Files.FS.FileID(p)
+	return err == nil && id == l.FileID
+}
+
+func (s *Service) linkURL(l Link, name string) string {
 	return s.ShareOrigin + "/x/" + s.SignLink(l) + "/" + httpx.PathEscape(name)
 }
 

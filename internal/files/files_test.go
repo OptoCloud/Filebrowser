@@ -409,3 +409,89 @@ func TestMoveNeverOverwrites(t *testing.T) {
 		t.Fatalf("target = %q, want the winner's %d", got, won)
 	}
 }
+
+// A real path holds no symlink. If one is swapped in after the permission
+// check (renamed over a component by someone with write access there), no
+// operation may follow it into another tree.
+func TestRealPathsDoNotFollowSwappedSymlinks(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"mine/dir", "theirs/dir"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"mine/dir/a.txt", "mine/b.txt", "theirs/dir/a.txt", "theirs/secret.txt"} {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(p), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := OpenFS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	// The swap: mine/dir and mine/b.txt become links into theirs.
+	for link, target := range map[string]string{"mine/dir": "../theirs/dir", "mine/b.txt": "../theirs/secret.txt"} {
+		full := filepath.Join(root, link)
+		if err := os.RemoveAll(full); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, full); err != nil {
+			t.Skip("symlinks unsupported:", err)
+		}
+	}
+	if file, err := f.Open("mine/dir/a.txt"); err == nil {
+		file.Close()
+		t.Error("Open followed a symlinked directory")
+	}
+	if file, _, err := f.OpenFile("mine/b.txt"); err == nil {
+		file.Close()
+		t.Error("OpenFile followed a symlinked file")
+	}
+	if _, err := f.Stat("mine/dir/a.txt"); err == nil {
+		t.Error("Stat followed a symlinked directory")
+	}
+	if _, err := f.Stat("mine/b.txt"); err == nil {
+		t.Error("Stat followed a symlinked file")
+	}
+	if err := f.Mkdir("mine/dir/new"); err == nil {
+		t.Error("Mkdir followed a symlinked directory")
+	}
+	if err := f.MkdirAll("mine/dir/x/y"); err == nil {
+		t.Error("MkdirAll followed a symlinked directory")
+	}
+	if err := f.Move("mine/dir/a.txt", "mine/stolen.txt"); err == nil {
+		t.Error("Move took a file out through a symlinked directory")
+	}
+	if err := f.Move("mine/b.txt", "mine/dir/planted.txt"); err == nil {
+		t.Error("Move put a file in through a symlinked directory")
+	}
+	if err := f.RemoveAll("mine/dir/a.txt"); err == nil {
+		t.Error("RemoveAll followed a symlinked directory")
+	}
+	if n, _ := f.Size("mine"); n != 0 {
+		t.Errorf("Size counted %d bytes behind symlinks", n)
+	}
+	var buf strings.Builder
+	if err := f.WriteZip(context.Background(), &buf, []string{"mine"}, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "theirs/") {
+		t.Error("zip includes content behind symlinks")
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "theirs/dir/a.txt")); string(got) != "theirs/dir/a.txt" {
+		t.Errorf("file behind the link changed: %q", got)
+	}
+	for _, p := range []string{"theirs/dir/new", "theirs/dir/x", "theirs/dir/planted.txt", "mine/stolen.txt"} {
+		if _, err := os.Lstat(filepath.Join(root, p)); err == nil {
+			t.Errorf("%s was created", p)
+		}
+	}
+	// Removing the swapped-in link itself removes the link, not its target.
+	if err := f.RemoveAll("mine/dir"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "theirs/dir/a.txt")); err != nil {
+		t.Error("RemoveAll removed the link's target")
+	}
+}

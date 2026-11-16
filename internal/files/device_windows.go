@@ -15,9 +15,9 @@ func deviceID(fs.FileInfo) (uint64, bool) { return 0, false }
 // fileID identifies the file at p (real path) by volume serial number and
 // file index.
 func (f *FS) fileID(p string) (string, error) {
-	file, err := f.root.Open(osPath(p))
+	file, err := f.open(p)
 	if err != nil {
-		return "", mapErr(err)
+		return "", err
 	}
 	defer file.Close()
 	var d windows.ByHandleFileInformation

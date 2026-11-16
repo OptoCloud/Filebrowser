@@ -383,3 +383,60 @@ func TestMFAExemption(t *testing.T) {
 		t.Fatal("exempt invite still requires a second factor")
 	}
 }
+
+// A signed link is for the file it was made for, not a later one at its path.
+func TestSignedLinkBoundToFileIdentity(t *testing.T) {
+	h := newHarness(t)
+	h.user("ivy", "admin")
+	write(t, h.root, "doc.pdf", "%PDF-1.4 original")
+	a := h.login("ivy")
+	link := decode[map[string]string](t, a.do("POST", "/api/files/preview-url", map[string]string{"path": "doc.pdf"}))["url"]
+	path := strings.TrimPrefix(link, shareOrigin)
+	expect(t, h.share().do("GET", path, nil), 200)
+	// Replaced as an upload does it: a new file renamed over the path.
+	write(t, h.root, "new.pdf", "%PDF-1.4 replacement")
+	if err := os.Rename(filepath.Join(h.root, "new.pdf"), filepath.Join(h.root, "doc.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.share().do("GET", path, nil)
+	if rec.Code != 404 || strings.Contains(rec.Body.String(), "replacement") {
+		t.Fatalf("signed link served the replacement file: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// Linking a single sign-on identity adds a sign-in method: it needs a fresh
+// login, and the session that asked for it must still stand at the callback.
+func TestOIDCLinkNeedsFreshLiveSession(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	u := h.user("jan", "user", store.Grant{Path: "jan", Permission: "read"})
+	rec := h.session(u, time.Hour).do("GET", "/api/auth/oidc/start?provider=x&link=1", nil)
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "reauth_required") {
+		t.Fatalf("old session could start a link: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	// A fresh session gets as far as the (unconfigured) provider.
+	expect(t, h.session(u, time.Minute).do("GET", "/api/auth/oidc/start?provider=x&link=1", nil), 400)
+
+	hash := h.srv.keys.HashToken("link-session")
+	now := time.Now()
+	if err := h.store.CreateSession(ctx, &store.Session{IDHash: hash, UserID: u.ID, CreatedAt: now, LastSeenAt: now,
+		ExpiresAt: now.Add(time.Hour), AuthMethod: "password"}); err != nil {
+		t.Fatal(err)
+	}
+	ident := &auth.OIDCIdentity{LinkUserID: u.ID, LinkSession: hash}
+	if !h.srv.linkSessionValid(ctx, ident) {
+		t.Fatal("live session refused")
+	}
+	if h.srv.linkSessionValid(ctx, &auth.OIDCIdentity{LinkUserID: u.ID}) {
+		t.Fatal("link without a session accepted")
+	}
+	if h.srv.linkSessionValid(ctx, &auth.OIDCIdentity{LinkUserID: u.ID + 1, LinkSession: hash}) {
+		t.Fatal("link for another user accepted")
+	}
+	if err := h.store.DeleteSession(ctx, hash); err != nil {
+		t.Fatal(err)
+	}
+	if h.srv.linkSessionValid(ctx, ident) {
+		t.Fatal("link completed after the session was revoked")
+	}
+}

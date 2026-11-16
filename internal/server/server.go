@@ -59,7 +59,10 @@ type Server struct {
 	shareLimiter *auth.RateLimiter
 	inviteLimit  *auth.RateLimiter
 	passkeyLimit *auth.RateLimiter
-	pending      *pendingLogins
+	// ceremonyLimit caps the security-key ceremonies one user can start: they
+	// share a bounded pool, which one account must not be able to fill.
+	ceremonyLimit *auth.RateLimiter
+	pending       *pendingLogins
 
 	proxies      []netip.Prefix
 	proxyWarning sync.Once
@@ -122,12 +125,13 @@ func New(d Deps) (*Server, error) {
 		totpBackoff:    auth.NewBackoff(5, 2*time.Second, 15*time.Minute, time.Hour),
 		shareBackoff:   auth.NewBackoff(10, time.Second, time.Minute, time.Hour),
 		// Share token lookups: 60/min per IP with a burst of 120.
-		shareLimiter: auth.NewRateLimiter(60, 120),
-		inviteLimit:  auth.NewRateLimiter(10, 20),
-		passkeyLimit: auth.NewRateLimiter(30, 30),
-		pending:      newPendingLogins(),
-		appMux:       http.NewServeMux(),
-		shareMux:     http.NewServeMux(),
+		shareLimiter:  auth.NewRateLimiter(60, 120),
+		inviteLimit:   auth.NewRateLimiter(10, 20),
+		passkeyLimit:  auth.NewRateLimiter(30, 30),
+		ceremonyLimit: auth.NewRateLimiter(20, 20),
+		pending:       newPendingLogins(),
+		appMux:        http.NewServeMux(),
+		shareMux:      http.NewServeMux(),
 	}
 	if s.shares.DefaultExpiry <= 0 || s.shares.DefaultExpiry > s.shares.MaxExpiry {
 		s.shares.DefaultExpiry = s.shares.MaxExpiry

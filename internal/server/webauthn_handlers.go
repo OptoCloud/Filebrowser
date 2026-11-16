@@ -97,6 +97,10 @@ func (s *Server) handleLoginWebAuthnBegin(w http.ResponseWriter, r *http.Request
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
 		return
 	}
+	if !s.ceremonyLimit.Allow(userKey("wa", user.ID), time.Now()) {
+		retryAfter(w, time.Minute)
+		return
+	}
 	wu, err := s.webauthnUser(ctx, user)
 	if err != nil {
 		httpx.InternalError(w, r, err)
@@ -269,6 +273,10 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 	}
 	id := httpx.IdentityFrom(r.Context())
 	if !requireFreshLogin(w, id) {
+		return
+	}
+	if !s.ceremonyLimit.Allow(userKey("wa", id.User.ID), time.Now()) {
+		retryAfter(w, time.Minute)
 		return
 	}
 	wu, err := s.webauthnUser(r.Context(), id.User)

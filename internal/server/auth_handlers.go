@@ -124,6 +124,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	now := time.Now()
+	// Checked before the name becomes a rate-limit key: the keys are kept for
+	// an hour, so megabyte-long names would otherwise pin memory.
+	if len(req.Username) > 64 {
+		req.Username = "" // no such user; the attempt still counts against the IP
+	}
 	// Hard backoff per IP and per IP+account. The account-wide limit is soft
 	// (short cap) so that failures from elsewhere cannot lock the owner out.
 	ip := s.loginBackoff.Slot("ip:" + httpx.LimitKey(ctx))
@@ -133,7 +138,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		retryAfter(w, d)
 		return
 	}
-	if len(req.Username) > 64 || len(req.Password) > auth.MaxPasswordLen {
+	if len(req.Password) > auth.MaxPasswordLen {
 		httpx.Error(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -543,6 +548,7 @@ func (s *Server) handleDeleteMySession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	var link int64
+	var session []byte
 	if r.URL.Query().Get("link") == "1" {
 		id, ok := s.authenticate(w, r)
 		if !ok {
@@ -552,9 +558,16 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
-		link = id.User.ID
+		// A linked identity is a sign-in method like a passkey: a stolen
+		// session must not be able to add one (see requireFreshLogin). This
+		// is a page navigation, so the refusal is a redirect.
+		if time.Since(id.Session.CreatedAt) > freshLogin {
+			http.Redirect(w, r, "/settings?error=reauth_required", http.StatusFound)
+			return
+		}
+		link, session = id.User.ID, id.Session.IDHash
 	}
-	u, err := s.oidc.Start(r.Context(), w, r.URL.Query().Get("provider"), link)
+	u, err := s.oidc.Start(r.Context(), w, r.URL.Query().Get("provider"), link, session)
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "login provider unavailable")
 		return
@@ -576,6 +589,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	target := ident.Issuer + " " + ident.Subject
 	if ident.LinkUserID > 0 {
+		// The session that asked for the link must still stand: logging out,
+		// revoking it or disabling the user while the provider's page was
+		// open cancels the link.
+		if !s.linkSessionValid(ctx, ident) {
+			s.audit.LogUser(ctx, &ident.LinkUserID, audit.OIDCDenied, target, map[string]any{"reason": "link session ended"})
+			s.loginRedirect(w, r, "oidc_failed")
+			return
+		}
 		err := s.store.LinkOIDC(ctx, ident.LinkUserID, ident.Issuer, ident.Subject)
 		if errors.Is(err, store.ErrConflict) {
 			http.Redirect(w, r, "/settings?error=oidc_already_linked", http.StatusFound)
@@ -611,6 +632,23 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.LogUser(ctx, &user.ID, audit.OIDCLogin, target, nil)
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// linkSessionValid reports whether the session that started an account link
+// still exists, is unexpired, recent enough to add a sign-in method, and
+// belongs to the enabled user being linked.
+func (s *Server) linkSessionValid(ctx context.Context, ident *auth.OIDCIdentity) bool {
+	if len(ident.LinkSession) == 0 {
+		return false
+	}
+	sess, err := s.store.SessionByHash(ctx, ident.LinkSession)
+	now := time.Now()
+	if err != nil || sess.UserID != ident.LinkUserID || now.After(sess.ExpiresAt) ||
+		now.Sub(sess.LastSeenAt) > s.cfg.Session.IdleTimeout.Duration || now.Sub(sess.CreatedAt) > freshLogin+10*time.Minute {
+		return false
+	}
+	user, err := s.store.UserByID(ctx, sess.UserID)
+	return err == nil && !user.Disabled
 }
 
 func (s *Server) handleOIDCUnlink(w http.ResponseWriter, r *http.Request) {

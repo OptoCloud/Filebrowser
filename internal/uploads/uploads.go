@@ -8,7 +8,7 @@ package uploads
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -246,14 +246,17 @@ func (u *Uploads) place(ev tushandler.HookEvent, a *files.Access, within string)
 	var final string
 	for range 5 {
 		if final, err = fsys.UniquePath(files.Join(dir, name)); err != nil {
-			return "", err
+			break
 		}
 		if err = fsys.Move(binPath(ev.Upload), final); !errors.Is(err, files.ErrExists) {
 			break
 		}
 	}
 	if err != nil {
-		return "", fmt.Errorf("move upload: %w", err)
+		// tusd sends the error text to the client, and file errors name the
+		// real path, which a drop-link uploader must not learn.
+		slog.Error("place upload", "upload", ev.Upload.ID, "err", err)
+		return "", reject(http.StatusConflict, "cannot store the file under this name")
 	}
 	_ = fsys.Root().Remove(infoPath(ev.Upload.ID))
 	return final, nil

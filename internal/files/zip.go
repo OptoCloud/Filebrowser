@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"os"
 	"strings"
 	"time"
 )
@@ -16,19 +17,15 @@ import (
 // not deflated.
 func (f *FS) WriteZip(ctx context.Context, w io.Writer, paths []string, allow func(real string) bool) error {
 	zw := zip.NewWriter(w)
-	fsys := f.root.FS()
 	seen := map[string]bool{}
 	for _, p := range paths {
 		prefix := Parent(p)
-		err := fs.WalkDir(fsys, osPath(p), func(name string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil // skip unreadable entries
-			}
+		err := f.walk(p, func(name, base string, fi fs.FileInfo, open func() (*os.File, error)) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if IsReservedName(d.Name()) {
-				if d.IsDir() {
+			if IsReservedName(base) {
+				if fi.IsDir() {
 					return fs.SkipDir
 				}
 				return nil
@@ -37,43 +34,41 @@ func (f *FS) WriteZip(ctx context.Context, w io.Writer, paths []string, allow fu
 			if prefix != "" {
 				rel = strings.TrimPrefix(name, prefix+"/")
 			}
-			if name == "." {
+			if name == "" {
 				rel = "files"
 			}
 			// Unzip tools treat '\' as a separator; a name created on the
 			// host could otherwise extract outside the target folder.
 			rel = strings.ReplaceAll(rel, `\`, "_")
 			if seen[rel] {
-				if d.IsDir() {
+				if fi.IsDir() {
 					return fs.SkipDir
 				}
 				return nil
 			}
 			seen[rel] = true
-			if d.Type()&fs.ModeSymlink != 0 {
-				// Follow file links only to targets the caller may read.
+			if fi.IsDir() {
+				_, err := zw.CreateHeader(&zip.FileHeader{Name: rel + "/", Modified: fi.ModTime(), Method: zip.Store})
+				return err
+			}
+			var src *os.File
+			switch {
+			case fi.Mode()&fs.ModeSymlink != 0:
+				// Follow file links only to targets the caller may read;
+				// directory links are not followed (loops).
 				target, err := f.Resolve(name)
 				if err != nil || !allow(target) {
 					return nil
 				}
-			}
-			// Resolve symlinks through the root; escaping links fail and are skipped.
-			fi, err := fs.Stat(fsys, name)
-			if err != nil {
-				return nil
-			}
-			if fi.IsDir() {
-				if d.Type()&fs.ModeSymlink != 0 {
-					return nil // do not follow directory symlinks (loops)
+				if src, fi, err = f.OpenFile(target); err != nil {
+					return nil
 				}
-				_, err := zw.CreateHeader(&zip.FileHeader{Name: rel + "/", Modified: fi.ModTime(), Method: zip.Store})
-				return err
-			}
-			if !fi.Mode().IsRegular() {
-				return nil
-			}
-			src, err := fsys.Open(name)
-			if err != nil {
+			case fi.Mode().IsRegular():
+				var err error
+				if src, err = open(); err != nil {
+					return nil // skip unreadable entries
+				}
+			default:
 				return nil
 			}
 			defer src.Close()
@@ -101,7 +96,6 @@ func (f *FS) Search(ctx context.Context, a *Access, start, q string, limit int, 
 	q = strings.ToLower(q)
 	var out []Entry
 	truncated := false
-	fsys := f.root.FS()
 
 	var walk func(dir string)
 	walk = func(dir string) {
@@ -114,25 +108,19 @@ func (f *FS) Search(ctx context.Context, a *Access, start, q string, limit int, 
 		}
 		switch min(a.Perm(dir), a.Perm(real)) {
 		case PermRead, PermWrite:
-			dir = real
-			_ = fs.WalkDir(fsys, osPath(dir), func(name string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return nil
-				}
+			_ = f.walk(real, func(name, base string, fi fs.FileInfo, _ func() (*os.File, error)) error {
 				if ctx.Err() != nil || len(out) >= limit {
 					truncated = true
 					return fs.SkipAll
 				}
-				if IsReservedName(d.Name()) {
-					if d.IsDir() {
+				if IsReservedName(base) {
+					if fi.IsDir() {
 						return fs.SkipDir
 					}
 					return nil
 				}
-				if name != "." && name != osPath(dir) && strings.Contains(strings.ToLower(d.Name()), q) {
-					if fi, err := d.Info(); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {
-						out = append(out, entryFromInfo(Parent(name), fi))
-					}
+				if name != real && strings.Contains(strings.ToLower(base), q) && (fi.IsDir() || fi.Mode().IsRegular()) {
+					out = append(out, entryFromInfo(Parent(name), base, fi))
 				}
 				return nil
 			})

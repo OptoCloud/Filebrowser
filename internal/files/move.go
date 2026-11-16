@@ -29,13 +29,13 @@ func (f *FS) ReservedDir(dir, sub string) (string, bool) {
 	top, known := f.filesystemTop(dir)
 	if top != "" {
 		p := Join(top, Reserved+"/"+sub)
-		if err := f.root.MkdirAll(p, 0o750); err == nil {
+		if err := f.mkdirAll(p, 0o750); err == nil {
 			return p, true
 		}
 		known = false // e.g. a read-only mount: use the central directory
 	}
 	p := Reserved + "/" + sub
-	if err := f.root.MkdirAll(p, 0o750); err != nil {
+	if err := f.mkdirAll(p, 0o750); err != nil {
 		slog.Error("create reserved directory", "path", p, "err", err)
 	}
 	return p, known
@@ -46,10 +46,10 @@ func (f *FS) ReservedDir(dir, sub string) (string, bool) {
 // belongs to the filesystem of its nearest existing ancestor. ok is false if
 // device ids are unavailable.
 func (f *FS) filesystemTop(dir string) (top string, ok bool) {
-	fi, err := f.root.Stat(osPath(dir))
-	for errors.Is(err, fs.ErrNotExist) && dir != "" {
+	fi, err := f.Stat(dir)
+	for errors.Is(err, ErrNotFound) && dir != "" {
 		dir = Parent(dir)
-		fi, err = f.root.Stat(osPath(dir))
+		fi, err = f.Stat(dir)
 	}
 	if err != nil {
 		return "", false
@@ -59,7 +59,7 @@ func (f *FS) filesystemTop(dir string) (top string, ok bool) {
 		return "", false
 	}
 	for top = dir; top != ""; top = Parent(top) {
-		pfi, err := f.root.Stat(osPath(Parent(top)))
+		pfi, err := f.Stat(Parent(top))
 		if err != nil {
 			return "", false
 		}
@@ -85,7 +85,7 @@ func (f *FS) Move(from, to string) error {
 		return mapErr(err)
 	}
 	if err := f.renameNoReplace(tmp, to); err != nil {
-		_ = f.root.RemoveAll(tmp)
+		_ = f.removeAll(tmp)
 		if !isCrossDevice(err) {
 			return mapErr(err)
 		}
@@ -94,25 +94,26 @@ func (f *FS) Move(from, to string) error {
 			return mapErr(err)
 		}
 	}
-	if err := f.root.RemoveAll(osPath(from)); err != nil {
+	if err := f.removeAll(from); err != nil {
 		// The data is safe at its destination; only the source lingers.
 		slog.Warn("move: copied but could not remove source", "from", from, "err", err)
 	}
 	return nil
 }
 
-// renameNoReplace renames from to to (real paths) unless to exists. rename(2)
-// replaces an existing file, and os.Root offers no RENAME_NOREPLACE, so the
-// check and the rename happen under one lock: two of our own operations (say,
-// uploads of the same name finishing together) can never overwrite each
-// other. A writer outside this process (SMB, a shell) can still race it.
+// renameNoReplace renames from to to (real paths) unless to exists. Not every
+// platform and filesystem can refuse to replace in the rename itself (see
+// renameAt), so the check and the rename also happen under one lock: two of
+// our own operations (say, uploads of the same name finishing together) can
+// never overwrite each other. Where the rename cannot refuse, a writer
+// outside this process (SMB, a shell) can still race it.
 func (f *FS) renameNoReplace(from, to string) error {
 	f.renameMu.Lock()
 	defer f.renameMu.Unlock()
 	if err := f.absent(to); err != nil {
 		return err
 	}
-	return f.rename(osPath(from), osPath(to))
+	return f.rename(from, to)
 }
 
 // FileID identifies the file or folder at the real path p independently of
@@ -122,10 +123,10 @@ func (f *FS) FileID(p string) (string, error) { return f.fileID(p) }
 
 // absent returns ErrExists if p exists (as any kind of entry, even a dangling symlink).
 func (f *FS) absent(p string) error {
-	if _, err := f.root.Lstat(osPath(p)); err == nil {
+	if _, err := f.lstat(p); err == nil {
 		return ErrExists
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return mapErr(err)
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
 	}
 	return nil
 }
@@ -134,39 +135,48 @@ func (f *FS) absent(p string) error {
 // modification times; symlinks are copied as links. Special files are
 // skipped. On failure it removes what it created.
 func (f *FS) copyTree(from, to string) (err error) {
-	fi, err := f.root.Lstat(osPath(from))
+	fi, err := f.lstat(from)
 	if err != nil {
 		return err
 	}
 	switch {
 	case fi.Mode()&fs.ModeSymlink != 0:
-		target, err := f.root.Readlink(osPath(from))
+		var target string
+		err := f.in(from, func(dir *os.Root, name string) (err error) {
+			target, err = dir.Readlink(name)
+			return err
+		})
 		if err != nil {
 			return err
 		}
-		return f.root.Symlink(target, to)
+		return f.in(to, func(dir *os.Root, name string) error { return dir.Symlink(target, name) })
 	case fi.IsDir():
-		if err := f.root.Mkdir(to, 0o700); err != nil {
+		if err := f.in(to, func(dir *os.Root, name string) error { return dir.Mkdir(name, 0o700) }); err != nil {
 			return err
 		}
 		defer func() {
 			if err != nil {
-				_ = f.root.RemoveAll(to)
+				_ = f.removeAll(to)
 			}
 		}()
-		des, err := f.readDir(from)
+		src, err := f.openDir(from)
 		if err != nil {
 			return err
 		}
-		for _, de := range des {
-			if err := f.copyTree(Join(from, de.Name()), Join(to, de.Name())); err != nil {
+		names, err := readNames(src)
+		_ = src.Close()
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			if IsReservedName(name) {
+				continue // trash and staged uploads of a nested filesystem stay where they are
+			}
+			if err := f.copyTree(Join(from, name), Join(to, name)); err != nil {
 				return err
 			}
 		}
-		if err := f.root.Chmod(to, fi.Mode().Perm()); err != nil {
-			return err
-		}
-		return f.root.Chtimes(to, fi.ModTime(), fi.ModTime())
+		return f.touch(to, fi.Mode().Perm(), fi.ModTime())
 	case fi.Mode().IsRegular():
 		return f.copyFile(from, to, fi)
 	}
@@ -174,18 +184,23 @@ func (f *FS) copyTree(from, to string) (err error) {
 }
 
 func (f *FS) copyFile(from, to string, fi fs.FileInfo) (err error) {
-	src, err := f.root.Open(osPath(from))
+	src, err := f.open(from)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
-	dst, err := f.root.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm())
+	var dst *os.File
+	// O_EXCL never follows a symlink at the new name.
+	err = f.in(to, func(dir *os.Root, name string) (err error) {
+		dst, err = dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm())
+		return err
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if err != nil {
-			_ = f.root.Remove(to)
+			_ = f.in(to, func(dir *os.Root, name string) error { return dir.Remove(name) })
 		}
 	}()
 	if _, err = io.Copy(dst, src); err != nil {
@@ -195,16 +210,7 @@ func (f *FS) copyFile(from, to string, fi fs.FileInfo) (err error) {
 	if err = dst.Close(); err != nil {
 		return err
 	}
-	return f.root.Chtimes(to, fi.ModTime(), fi.ModTime())
-}
-
-func (f *FS) readDir(p string) ([]fs.DirEntry, error) {
-	d, err := f.root.Open(osPath(p))
-	if err != nil {
-		return nil, err
-	}
-	defer d.Close()
-	return d.ReadDir(-1)
+	return f.touch(to, fi.Mode().Perm(), fi.ModTime())
 }
 
 // newID returns a random identifier for trash entries and temporary copies.

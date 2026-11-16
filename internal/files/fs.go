@@ -46,7 +46,9 @@ func OpenFS(dir string) (*FS, error) {
 			return nil, fmt.Errorf("create %s: %w", d, err)
 		}
 	}
-	return &FS{root: root, dir: abs, rename: root.Rename}, nil
+	fsys := &FS{root: root, dir: abs}
+	fsys.rename = fsys.renameAt
+	return fsys, nil
 }
 
 func (f *FS) Close() error { return f.root.Close() }
@@ -74,20 +76,23 @@ func mapErr(err error) error {
 	return err
 }
 
+// The methods below take real paths (see Resolve) and never follow a symlink
+// in them (see nofollow.go).
+
+// Stat describes the file or directory at the real path p. A real path holds
+// no symlink, so finding one there means it was swapped in: it is refused.
 func (f *FS) Stat(p string) (fs.FileInfo, error) {
-	fi, err := f.root.Stat(osPath(p))
-	return fi, mapErr(err)
+	fi, err := f.lstat(p)
+	if err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		return nil, ErrForbidden
+	}
+	return fi, err
 }
 
-func (f *FS) Lstat(p string) (fs.FileInfo, error) {
-	fi, err := f.root.Lstat(osPath(p))
-	return fi, mapErr(err)
-}
+// Lstat describes the entry at p itself, which may be a symlink.
+func (f *FS) Lstat(p string) (fs.FileInfo, error) { return f.lstat(p) }
 
-func (f *FS) Open(p string) (*os.File, error) {
-	file, err := f.root.Open(osPath(p))
-	return file, mapErr(err)
-}
+func (f *FS) Open(p string) (*os.File, error) { return f.open(p) }
 
 // OpenFile opens a regular file for reading and returns it with its info.
 func (f *FS) OpenFile(p string) (*os.File, fs.FileInfo, error) {
@@ -120,8 +125,8 @@ type Entry struct {
 	Mime    string    `json:"mime,omitempty"`
 }
 
-func entryFromInfo(dir string, fi fs.FileInfo) Entry {
-	e := Entry{Name: fi.Name(), Path: Join(dir, fi.Name()), IsDir: fi.IsDir(), ModTime: fi.ModTime().UTC()}
+func entryFromInfo(dir, name string, fi fs.FileInfo) Entry {
+	e := Entry{Name: name, Path: Join(dir, name), IsDir: fi.IsDir(), ModTime: fi.ModTime().UTC()}
 	if !e.IsDir {
 		e.Size = fi.Size()
 		e.Mime = MimeType(e.Name)
@@ -138,42 +143,40 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 		return nil, PermNone, err
 	}
 	perm := min(a.Perm(dir), a.Perm(real))
-	d, err := f.Open(real)
+	d, err := f.openDir(real)
 	if err != nil {
 		return nil, perm, err
 	}
 	defer d.Close()
-	des, err := d.ReadDir(-1)
+	names, err := readNames(d)
 	if err != nil {
-		if fi, serr := d.Stat(); serr == nil && !fi.IsDir() {
-			return nil, perm, ErrNotDir
-		}
 		return nil, perm, mapErr(err)
 	}
 	var allowed map[string]bool
 	if perm == PermTraverse {
 		allowed = a.traverseChildren(real)
 	}
-	out := make([]Entry, 0, len(des))
-	for _, de := range des {
-		name := de.Name()
+	out := make([]Entry, 0, len(names))
+	for _, name := range names {
 		if IsReservedName(name) {
 			continue
 		}
 		if allowed != nil && !allowed[name] {
 			continue
 		}
-		child := Join(real, name)
-		if de.Type()&fs.ModeSymlink != 0 {
-			target, err := f.Resolve(child)
+		fi, err := d.Lstat(name)
+		if err != nil {
+			continue
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			// Shown as its target, if that is readable (escaping links are hidden).
+			target, err := f.Resolve(Join(real, name))
 			if err != nil || a.Perm(target) < PermRead {
 				continue
 			}
-		}
-		// Stat through the root so symlinks resolve (and escaping ones are hidden).
-		fi, err := f.root.Stat(osPath(child))
-		if err != nil {
-			continue
+			if fi, err = f.Stat(target); err != nil {
+				continue
+			}
 		}
 		if !fi.IsDir() && !fi.Mode().IsRegular() {
 			continue
@@ -181,7 +184,7 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 		if allowed != nil && !fi.IsDir() {
 			continue
 		}
-		out = append(out, entryFromInfo(dir, fi))
+		out = append(out, entryFromInfo(dir, name, fi))
 	}
 	slices.SortFunc(out, func(a, b Entry) int {
 		if a.IsDir != b.IsDir {
@@ -196,39 +199,56 @@ func (f *FS) List(a *Access, dir string) ([]Entry, Perm, error) {
 }
 
 func (f *FS) Mkdir(p string) error {
-	return mapErr(f.root.Mkdir(osPath(p), 0o755))
+	return f.in(p, func(dir *os.Root, name string) error { return dir.Mkdir(name, 0o755) })
 }
 
-func (f *FS) MkdirAll(p string) error {
+func (f *FS) MkdirAll(p string) error { return f.mkdirAll(p, 0o755) }
+
+func (f *FS) mkdirAll(p string, perm fs.FileMode) error {
 	if p == "" {
 		return nil
 	}
-	return mapErr(f.root.MkdirAll(osPath(p), 0o755))
+	dir, err := f.openDirPerm(p, perm)
+	if err != nil {
+		return err
+	}
+	return dir.Close()
 }
 
 func (f *FS) RemoveAll(p string) error {
 	if p == "" || IsReservedName(p) {
 		return ErrForbidden
 	}
-	return mapErr(f.root.RemoveAll(osPath(p)))
+	return f.removeAll(p)
+}
+
+// removeAll removes the entry at p with everything below it; a symlink is
+// removed, not followed.
+func (f *FS) removeAll(p string) error {
+	return f.in(p, func(dir *os.Root, name string) error { return dir.RemoveAll(name) })
 }
 
 // UniquePath returns p, or "name (n).ext" in the same directory if p exists.
 func (f *FS) UniquePath(p string) (string, error) {
-	dir, name := Parent(p), Base(p)
+	parent, name, err := f.parent(p)
+	if err != nil {
+		return "", err
+	}
+	defer parent.Close()
+	dir := Parent(p)
 	ext := path.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
 	if ext == name {
 		stem, ext = name, ""
 	}
 	for i := range 10000 {
-		cand := p
+		cand := name
 		if i > 0 {
-			cand = Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+			cand = fmt.Sprintf("%s (%d)%s", stem, i, ext)
 		}
-		_, err := f.root.Lstat(osPath(cand))
+		_, err := parent.Lstat(cand)
 		if errors.Is(err, fs.ErrNotExist) {
-			return cand, nil
+			return Join(dir, cand), nil
 		} else if err != nil {
 			return "", mapErr(err)
 		}
@@ -240,19 +260,14 @@ func (f *FS) UniquePath(p string) (string, error) {
 // counting Reserved directories (trash and staged uploads).
 func (f *FS) Size(p string) (int64, error) {
 	var total int64
-	err := fs.WalkDir(f.root.FS(), osPath(p), func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() && IsReservedName(d.Name()) {
+	err := f.walk(p, func(_, name string, fi fs.FileInfo, _ func() (*os.File, error)) error {
+		if fi.IsDir() && IsReservedName(name) {
 			return fs.SkipDir
 		}
-		if d.Type().IsRegular() {
-			if fi, err := d.Info(); err == nil {
-				total += fi.Size()
-			}
+		if fi.Mode().IsRegular() {
+			total += fi.Size()
 		}
 		return nil
 	})
-	return total, mapErr(err)
+	return total, err
 }

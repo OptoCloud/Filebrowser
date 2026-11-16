@@ -20,9 +20,9 @@ func deviceID(fi fs.FileInfo) (uint64, bool) {
 
 // fileID identifies the file at p (real path) by device and inode.
 func (f *FS) fileID(p string) (string, error) {
-	fi, err := f.root.Stat(osPath(p))
+	fi, err := f.Stat(p)
 	if err != nil {
-		return "", mapErr(err)
+		return "", err
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {

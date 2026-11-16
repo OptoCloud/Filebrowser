@@ -46,6 +46,8 @@ type OIDCIdentity struct {
 	Subject    string
 	Username   string
 	LinkUserID int64
+	// LinkSession is the hash of the session that asked for the link.
+	LinkSession []byte
 }
 
 type oidcState struct {
@@ -54,6 +56,7 @@ type oidcState struct {
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
 	Link     int64  `json:"l,omitempty"`
+	Session  []byte `json:"h,omitempty"`
 	Expires  int64  `json:"e"`
 }
 
@@ -116,8 +119,10 @@ func (o *OIDC) cookieName() string {
 }
 
 // Start returns the provider authorization URL and sets the state cookie.
-// linkUserID > 0 links the identity to an existing, logged-in user.
-func (o *OIDC) Start(ctx context.Context, w http.ResponseWriter, providerID string, linkUserID int64) (string, error) {
+// linkUserID > 0 links the identity to an existing, logged-in user, whose
+// session (linkSession, its hash) must still be valid when the provider
+// returns: the callback cannot see the SameSite=Strict session cookie.
+func (o *OIDC) Start(ctx context.Context, w http.ResponseWriter, providerID string, linkUserID int64, linkSession []byte) (string, error) {
 	p := o.providers[providerID]
 	if p == nil {
 		return "", errors.New("unknown provider")
@@ -131,6 +136,7 @@ func (o *OIDC) Start(ctx context.Context, w http.ResponseWriter, providerID stri
 		Nonce:    NewToken(16),
 		Verifier: oauth2.GenerateVerifier(),
 		Link:     linkUserID,
+		Session:  linkSession,
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 	raw, _ := json.Marshal(st)
@@ -215,5 +221,5 @@ func (o *OIDC) Callback(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		}
 	}
 	username, _ := claims["preferred_username"].(string)
-	return &OIDCIdentity{Provider: st.Provider, Issuer: idt.Issuer, Subject: idt.Subject, Username: username, LinkUserID: st.Link}, nil
+	return &OIDCIdentity{Provider: st.Provider, Issuer: idt.Issuer, Subject: idt.Subject, Username: username, LinkUserID: st.Link, LinkSession: st.Session}, nil
 }

@@ -12,6 +12,7 @@
   const me = $derived(page.data.me);
   const notices: Record<string, string> = {
     oidc_already_linked: 'That single sign-on account is already linked to another user.',
+    reauth_required: 'For your security, log out and log in again to link a single sign-on account.',
   };
   let notice = $state(
     page.url.searchParams.get('linked')
