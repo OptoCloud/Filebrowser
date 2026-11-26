@@ -9,3 +9,4 @@
 coverage.out
 preview/
 /.tracker/
+/.playwright-mcp/

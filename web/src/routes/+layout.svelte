@@ -4,7 +4,7 @@
   import { page } from '$app/state';
   import { logout } from '#lib/api.js';
   import { filesHref } from '#lib/nav.js';
-  import { appUploader } from '#lib/upload.svelte.js';
+  import { appUploader, forgetUploads } from '#lib/upload.svelte.js';
   import Icon from '#lib/components/Icon.svelte';
   import UploadPanel from '#lib/components/UploadPanel.svelte';
 
@@ -17,12 +17,17 @@
   function signOut() {
     appUploader.cancelAll();
     appUploader.clearFinished();
+    forgetUploads();
     void logout();
   }
 
   // Closing the tab would abort running uploads (only ever started on the app origin).
   function onbeforeunload(e: BeforeUnloadEvent) {
     if (appUploader.busy) e.preventDefault();
+  }
+
+  function onkeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && menuOpen) menuOpen = false;
   }
 
   function active(prefix: string) {
@@ -36,10 +41,16 @@
 {:else}
   <nav class="top">
     <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> filebrowser</a>
-    <button class="icon menu-btn" onclick={() => (menuOpen = !menuOpen)} aria-label="Menu">
+    <button
+      class="icon menu-btn"
+      onclick={() => (menuOpen = !menuOpen)}
+      aria-label="Menu"
+      aria-expanded={menuOpen}
+      aria-controls="main-menu"
+    >
       <Icon name="menu" />
     </button>
-    <div class="links" class:open={menuOpen}>
+    <div class="links" id="main-menu" class:open={menuOpen}>
       {#if !me.restricted}
         <a href={filesHref('')} class:active={active('/files')} onclick={() => (menuOpen = false)}>
           Files
@@ -83,7 +94,7 @@
   <UploadPanel uploader={appUploader} />
 {/if}
 
-<svelte:window {onbeforeunload} />
+<svelte:window {onbeforeunload} {onkeydown} />
 
 <style>
   .top {

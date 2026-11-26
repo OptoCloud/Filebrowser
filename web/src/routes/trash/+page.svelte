@@ -70,7 +70,7 @@
   {#if retention > 0}<p class="muted small">
       Items are deleted permanently after {retention} days.
     </p>{/if}
-  {#if err}<div class="error">{err}</div>{/if}
+  {#if err}<div class="error" role="alert">{err}</div>{/if}
   {#if notice}<div class="notice">{notice}</div>{/if}
 
   {#if !items.length}

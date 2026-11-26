@@ -157,7 +157,7 @@
       {/if}
       <div class="content">
         {#if err}
-          <div class="error">{err}</div>
+          <div class="error" role="alert">{err}</div>
         {:else if !info}
           <p class="muted">Loading…</p>
         {:else if limit && (waiting || tooLarge) && (kind !== 'image' || isViewableImage(info.mime))}

@@ -195,7 +195,7 @@
   <div class="card login">
     <p class="brand"><Icon name="folder" size={22} /> filebrowser</p>
     <h1>Log in</h1>
-    {#if err}<div class="error">{err}</div>{/if}
+    {#if err}<div class="error" role="alert">{err}</div>{/if}
     {#if mfaToken}
       {#if mode === 'webauthn' && keyUsable}
         <p>

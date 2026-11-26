@@ -59,7 +59,7 @@
     <p class="notice lock"><Icon name="lock" size={16} /> {protection}</p>
   {/if}
   {#if err}
-    <div class="error">{err}</div>
+    <div class="error" role="alert">{err}</div>
   {:else if !a.listable || a.encrypted === 'headers'}
     <p class="muted pad">
       {a.encrypted === 'headers'

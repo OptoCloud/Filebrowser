@@ -41,12 +41,12 @@
   <div class="card box">
     <h1>Create your account</h1>
     {#if loadErr}
-      <div class="error">{loadErr}</div>
+      <div class="error" role="alert">{loadErr}</div>
     {:else if !info}
       <p class="muted">Checking invite…</p>
     {:else}
       <p class="muted small">This invite expires {formatDate(info.expires_at)}.</p>
-      {#if err}<div class="error">{err}</div>{/if}
+      {#if err}<div class="error" role="alert">{err}</div>{/if}
       <form onsubmit={accept}>
         <label class="field">
           Username

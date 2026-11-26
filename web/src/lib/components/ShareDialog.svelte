@@ -156,7 +156,7 @@
           Only the first browser to open the link may use it
         </label>
       {/if}
-      {#if err}<div class="error">{err}</div>{/if}
+      {#if err}<div class="error" role="alert">{err}</div>{/if}
     </form>
   {/if}
   {#snippet footer()}

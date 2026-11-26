@@ -276,7 +276,7 @@
       </button>
     {/each}
   </div>
-  {#if err}<div class="error">{err}</div>{/if}
+  {#if err}<div class="error" role="alert">{err}</div>{/if}
   {#if notice}<div class="notice">{notice}</div>{/if}
 
   {#if tab === 'users'}
@@ -511,7 +511,7 @@
         Admins, and users with write access unless exempted, must set up two-factor authentication
         at first login.
       </p>
-      {#if modalErr}<div class="error">{modalErr}</div>{/if}
+      {#if modalErr}<div class="error" role="alert">{modalErr}</div>{/if}
     </form>
     {#snippet footer()}
       <button onclick={() => (createOpen = false)}>Cancel</button>
@@ -550,7 +550,7 @@
         Folder access{ed.role === 'admin' ? ' (admins can access everything regardless)' : ''}:
       </p>
       {@render grantEditor(edGrants)}
-      {#if modalErr}<div class="error">{modalErr}</div>{/if}
+      {#if modalErr}<div class="error" role="alert">{modalErr}</div>{/if}
     </form>
     {#snippet footer()}
       <button onclick={() => (editing = null)}>Cancel</button>
@@ -594,7 +594,7 @@
         <label class="field">
           Valid for (days, max 30)<input type="number" min="1" max="30" bind:value={inv.days} />
         </label>
-        {#if modalErr}<div class="error">{modalErr}</div>{/if}
+        {#if modalErr}<div class="error" role="alert">{modalErr}</div>{/if}
       </form>
     {/if}
     {#snippet footer()}

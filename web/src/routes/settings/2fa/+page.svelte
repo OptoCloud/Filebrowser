@@ -169,7 +169,7 @@
         <span class="small muted">Manage it in <a href={resolve('/settings')}>Settings</a>.</span>
       </p>
     {:else}
-      {#if err}<div class="error">{err}</div>{/if}
+      {#if err}<div class="error" role="alert">{err}</div>{/if}
       {#if !secret}
         <p>
           Use an authenticator app (Aegis, 2FAS, Google Authenticator, 1Password, …) to generate
@@ -212,7 +212,7 @@
       Log in with a hardware key (such as a YubiKey) or a passkey stored on your phone, computer or
       password manager.
     </p>
-    {#if keysError}<div class="error">{keysError}</div>{/if}
+    {#if keysError}<div class="error" role="alert">{keysError}</div>{/if}
     {#if keyNotice}<div class="notice">{keyNotice}</div>{/if}
     {#if keys.length}
       <ul class="plain">
@@ -260,7 +260,7 @@
           ? 'Follow the prompt from your browser: insert or touch your key, or choose where to save the passkey.'
           : 'A name helps you tell your keys apart, for example "YubiKey on keychain".'}
       </p>
-      {#if addErr}<div class="error">{addErr}</div>{/if}
+      {#if addErr}<div class="error" role="alert">{addErr}</div>{/if}
     </form>
     {#snippet footer()}
       <button onclick={closeAdd}>Cancel</button>

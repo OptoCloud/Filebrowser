@@ -75,7 +75,7 @@
   <p class="muted small">
     Links are shown only once, when created. Create a share from the file browser.
   </p>
-  {#if err}<div class="error">{err}</div>{/if}
+  {#if err}<div class="error" role="alert">{err}</div>{/if}
   {#if !loaded}
     <p class="muted">Loading…</p>
   {:else if !visible.length}

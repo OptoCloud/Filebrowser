@@ -11,7 +11,7 @@
 </script>
 
 {#if total > 0}
-  <div class="panel">
+  <div class="panel" role="region" aria-label="Uploads">
     <header>
       <strong>Uploads {done}/{total}</strong>
       <span class="spacer"></span>
@@ -20,7 +20,12 @@
       {:else}
         <button class="small" onclick={() => uploader.clearFinished()}>Clear</button>
       {/if}
-      <button class="icon" onclick={() => (collapsed = !collapsed)} aria-label="Toggle">
+      <button
+        class="icon"
+        onclick={() => (collapsed = !collapsed)}
+        aria-label={collapsed ? 'Show uploads' : 'Hide uploads'}
+        aria-expanded={!collapsed}
+      >
         <Icon name={collapsed ? 'up' : 'down'} size={18} />
       </button>
     </header>

@@ -62,7 +62,7 @@
       <button class="small ghost" onclick={() => open(c.path)}>{c.name}</button>
     {/each}
   </div>
-  {#if err}<div class="error">{err}</div>{/if}
+  {#if err}<div class="error" role="alert">{err}</div>{/if}
   <ul>
     {#if dir}
       <li>

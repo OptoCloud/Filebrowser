@@ -119,7 +119,7 @@
   <div class="page narrow">
     <h1>Settings</h1>
     {#if notice}<div class="notice">{notice}</div>{/if}
-    {#if pageErr}<div class="error">{pageErr}</div>{/if}
+    {#if pageErr}<div class="error" role="alert">{pageErr}</div>{/if}
 
     <div class="card">
       <h2 class="first">Account</h2>
@@ -185,7 +185,7 @@
             minlength="10"
           />
         </label>
-        {#if pwErr}<div class="error">{pwErr}</div>{/if}
+        {#if pwErr}<div class="error" role="alert">{pwErr}</div>{/if}
         {#if pwMsg}<div class="notice">{pwMsg}</div>{/if}
         <button class="primary">Save password</button>
       </form>
@@ -261,7 +261,7 @@
           Log out everywhere
         </button>
       </div>
-      {#if sessErr}<div class="error">{sessErr}</div>{/if}
+      {#if sessErr}<div class="error" role="alert">{sessErr}</div>{/if}
       <ul class="plain">
         {#each sessions as s (s.id)}
           <li class="row">
@@ -306,7 +306,7 @@
           required
         />
       </label>
-      {#if dErr}<div class="error">{dErr}</div>{/if}
+      {#if dErr}<div class="error" role="alert">{dErr}</div>{/if}
     </form>
     {#snippet footer()}
       <button onclick={() => (disableOpen = false)}>Cancel</button>

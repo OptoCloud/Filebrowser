@@ -216,7 +216,16 @@
       <p>
         Preparing this file for playback{plan?.mode === 'transcode' ? ' (converting audio)' : ''}…
       </p>
-      <div class="progress"><div style="width:{pct}%"></div></div>
+      <div
+        class="progress"
+        role="progressbar"
+        aria-label="Preparing"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={pct}
+      >
+        <div style="width:{pct}%"></div>
+      </div>
       <p class="muted small">
         {job?.state === 'queued' ? 'Waiting for a free slot…' : `${pct}%`}. This only happens once;
         the result is cached.
@@ -265,7 +274,7 @@
       <Icon name="external" size={16} />Open in VLC / stream URL
     </button>
   </div>
-  {#if externalErr}<div class="error">{externalErr}</div>{/if}
+  {#if externalErr}<div class="error" role="alert">{externalErr}</div>{/if}
   {#if externalURL}
     <div class="ext">
       <CopyField value={externalURL} />
