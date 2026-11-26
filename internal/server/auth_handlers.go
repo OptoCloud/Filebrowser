@@ -517,7 +517,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	guess.Refund()
-	if err := auth.ValidatePassword(req.New); err != nil {
+	if err := s.passwords.Check(ctx, req.New, id.User.Username); err != nil {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -751,7 +751,7 @@ func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "username may contain letters, digits, '.', '_' and '-' (max 64)")
 		return
 	}
-	if err := auth.ValidatePassword(req.Password); err != nil {
+	if err := s.passwords.Check(r.Context(), req.Password, req.Username); err != nil {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}

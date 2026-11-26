@@ -58,6 +58,9 @@ type Config struct {
 	// the pages and in the previews chat apps show for its links.
 	SiteName   string `toml:"site_name"`
 	ThemeColor string `toml:"theme_color"`
+	// CheckPwnedPasswords asks the Pwned Passwords service whether a new
+	// password is in a known breach; five hex digits of its SHA-1 are sent.
+	CheckPwnedPasswords bool `toml:"check_pwned_passwords"`
 	// SecurityContact is where to report a vulnerability: a mailto: or
 	// https: address, published as /.well-known/security.txt. Unset, there
 	// is no such file.
@@ -172,15 +175,16 @@ type OIDC struct {
 
 func Default() Config {
 	return Config{
-		Listen:         "127.0.0.1:8080",
-		SiteName:       "filebrowser",
-		ThemeColor:     "#2563eb",
-		AppOrigin:      "http://files.localhost:8080",
-		ShareOrigin:    "http://share.localhost:8080",
-		DataDir:        "data",
-		CacheDir:       "cache",
-		FilesRoot:      "files",
-		TrustedProxies: []string{"127.0.0.1/32", "::1/128"},
+		Listen:              "127.0.0.1:8080",
+		SiteName:            "filebrowser",
+		CheckPwnedPasswords: true,
+		ThemeColor:          "#2563eb",
+		AppOrigin:           "http://files.localhost:8080",
+		ShareOrigin:         "http://share.localhost:8080",
+		DataDir:             "data",
+		CacheDir:            "cache",
+		FilesRoot:           "files",
+		TrustedProxies:      []string{"127.0.0.1/32", "::1/128"},
 		Session: Session{
 			IdleTimeout:     Duration{7 * 24 * time.Hour},
 			AbsoluteTimeout: Duration{30 * 24 * time.Hour},

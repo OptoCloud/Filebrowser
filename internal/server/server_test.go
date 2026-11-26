@@ -48,6 +48,7 @@ func newHarnessWith(t *testing.T, adjust func(*config.Config)) *harness {
 	cfg := config.Default()
 	cfg.AppOrigin, cfg.ShareOrigin, cfg.Dev = appOrigin, shareOrigin, true
 	cfg.FilesRoot, cfg.DataDir, cfg.CacheDir = root, t.TempDir(), t.TempDir()
+	cfg.CheckPwnedPasswords = false // no calls out of the tests
 	if adjust != nil {
 		adjust(&cfg)
 	}

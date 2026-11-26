@@ -308,7 +308,7 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		if err != nil {
 			return err
 		}
-		if err := auth.ValidatePassword(pw); err != nil {
+		if err := (&auth.PasswordPolicy{Pwned: cfg.CheckPwnedPasswords}).Check(ctx, pw, name); err != nil {
 			return err
 		}
 		hash, err := auth.HashPassword(pw)
@@ -353,7 +353,7 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		if err != nil {
 			return err
 		}
-		if err := auth.ValidatePassword(pw); err != nil {
+		if err := (&auth.PasswordPolicy{Pwned: cfg.CheckPwnedPasswords}).Check(ctx, pw, name); err != nil {
 			return err
 		}
 		hash, err := auth.HashPassword(pw)

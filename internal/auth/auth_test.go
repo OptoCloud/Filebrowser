@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"context"
 	"filebrowser/internal/config"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -207,5 +210,43 @@ func TestOIDCUsedMFA(t *testing.T) {
 	}
 	if usedMFA(config.OIDC{TrustMFA: true, MFAAmr: []string{"otp"}}, map[string]any{"amr": "otp"}) {
 		t.Error("a malformed amr claim was accepted")
+	}
+}
+
+func TestPasswordPolicy(t *testing.T) {
+	ctx := context.Background()
+	offline := &PasswordPolicy{}
+	for _, pw := range []string{"short", "aaaaaaaaaaaa", "abababababab", "1234567890", "abcdefghijkl", "9876543210", "Password123",
+		"qwertyuiop", "my-alice-password", "ALICE-2026-xyz"} {
+		if offline.Check(ctx, pw, "alice") == nil {
+			t.Errorf("%q accepted", pw)
+		}
+	}
+	for _, pw := range []string{"correct horse battery", "Tr0ub4dor&3-xkcd", "vier-Wörter-für-heute", "al-is-fine-here"} {
+		if err := offline.Check(ctx, pw, "alice"); err != nil {
+			t.Errorf("%q: %v", pw, err)
+		}
+	}
+	// "password" has SHA-1 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8.
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		if r.Header.Get("Add-Padding") != "true" {
+			t.Error("no padding asked for")
+		}
+		w.Write([]byte("0018A45C4D1DEF81644B54AB7F969B88D65:1\r\n1E4C9B93F3F0682250B6CF8331B7EE68FD8:3861493\r\nFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:0\r\n"))
+	}))
+	defer srv.Close()
+	p := &PasswordPolicy{Pwned: true, RangeURL: srv.URL + "/range/"}
+	if n := p.pwned(ctx, "password"); n != 3861493 || asked != "/range/5BAA6" {
+		t.Fatalf("pwned = %d, asked %q", n, asked)
+	}
+	if n := p.pwned(ctx, "a password nobody has used before"); n != 0 {
+		t.Fatalf("unbreached password: %d", n)
+	}
+	// Unreachable: the password is accepted.
+	down := &PasswordPolicy{Pwned: true, RangeURL: "http://127.0.0.1:1/range/"}
+	if err := down.Check(ctx, "correct horse battery", ""); err != nil {
+		t.Fatalf("with the service down: %v", err)
 	}
 }

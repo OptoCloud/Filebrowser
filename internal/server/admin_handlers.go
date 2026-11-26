@@ -111,7 +111,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := ""
 	if req.Password != "" {
-		if err := auth.ValidatePassword(req.Password); err != nil {
+		if err := s.passwords.Check(r.Context(), req.Password, req.Username); err != nil {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}

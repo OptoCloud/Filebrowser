@@ -65,6 +65,7 @@ type Server struct {
 	// reportLimiter bounds the policy violation reports logged per client.
 	reportLimiter *auth.RateLimiter
 	hooks         *webhooks.Dispatcher
+	passwords     *auth.PasswordPolicy
 	// r2 is the upload bucket, or nil when none is configured.
 	r2           *uploads.R2
 	inviteLimit  *auth.RateLimiter
@@ -188,6 +189,7 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s.static.shareCard = s.shareCard
+	s.passwords = &auth.PasswordPolicy{Pwned: cfg.CheckPwnedPasswords}
 	s.hooks = webhooks.New(d.Store, d.Keys)
 	s.audit.Notify = s.notifyHooks
 	s.routes()
