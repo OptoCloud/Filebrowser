@@ -3,11 +3,8 @@ package shares
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -17,7 +14,6 @@ import (
 
 	"filebrowser/internal/auth"
 	"filebrowser/internal/files"
-	"filebrowser/internal/httpx"
 	"filebrowser/internal/store"
 )
 
@@ -178,59 +174,6 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 	return sh, token, nil
 }
 
-// Limits are what a drop link accepts, with the server defaults filled in;
-// 0 still means no limit.
-type Limits struct {
-	Bytes     int64 // in total
-	Files     int   // in total
-	FileBytes int64 // per file
-	Types     []string
-}
-
-func (s *Service) Limits(sh *store.Share) Limits {
-	l := Limits{Bytes: sh.MaxBytes, Files: sh.MaxFiles, FileBytes: sh.MaxFileBytes, Types: sh.AllowedTypes}
-	if l.Bytes == 0 {
-		l.Bytes = s.DropMaxBytes
-	}
-	if l.Files == 0 {
-		l.Files = s.DropMaxFiles
-	}
-	if l.FileBytes == 0 || (s.UploadMaxSize > 0 && l.FileBytes > s.UploadMaxSize) {
-		l.FileBytes = s.UploadMaxSize
-	}
-	return l
-}
-
-// Allows reports whether a file of the media type mime may be dropped.
-func (l Limits) Allows(mime string) bool {
-	return len(l.Types) == 0 || slices.Contains(l.Types, files.Category(mime))
-}
-
-func (s *Service) sessionCookieName(id int64) string { return s.cookieName("fbd", id) }
-
-// Session reports whether the browser may use sh: always, unless sh is a
-// single-session link, which admits only the first browser to open it. With
-// w set, a link nobody has opened yet is claimed for this browser.
-func (s *Service) Session(ctx context.Context, w http.ResponseWriter, r *http.Request, sh *store.Share) (bool, error) {
-	if !sh.SingleSession {
-		return true, nil
-	}
-	if c, err := r.Cookie(s.sessionCookieName(sh.ID)); err == nil && sh.SessionHash != nil {
-		return auth.ConstantTimeEqual(s.Keys.HashToken(c.Value), sh.SessionHash), nil
-	}
-	if sh.SessionHash != nil || w == nil {
-		return false, nil
-	}
-	nonce := auth.NewToken(18)
-	ok, err := s.Store.ClaimShareSession(ctx, sh.ID, s.Keys.HashToken(nonce))
-	if err != nil || !ok {
-		return false, err
-	}
-	auth.SetCookie(w, auth.Cookie{Name: s.sessionCookieName(sh.ID), Value: nonce, Expires: sh.ExpiresAt,
-		SameSite: http.SameSiteStrictMode}, s.Secure)
-	return true, nil
-}
-
 func (s *Service) URL(token string) string { return s.ShareOrigin + "/s/" + token }
 
 // Resolved is a valid share together with its owner's current access.
@@ -333,167 +276,4 @@ func (r *Resolved) Rel(full string) string {
 		return full
 	}
 	return strings.TrimPrefix(strings.TrimPrefix(full, r.Root), "/")
-}
-
-func (s *Service) unlockCookieName(id int64) string { return s.cookieName("fbs", id) }
-
-// unlockSubject is what an unlock cookie vouches for: the share with the
-// password it had, so that a changed password asks again.
-func unlockSubject(sh *store.Share) string {
-	return strconv.FormatInt(sh.ID, 10) + "|" + sh.PasswordHash
-}
-
-// Unlocked reports whether r carries a valid unlock cookie (or no password is set).
-func (s *Service) Unlocked(r *http.Request, sh *store.Share) bool {
-	if sh.PasswordHash == "" {
-		return true
-	}
-	c, err := r.Cookie(s.unlockCookieName(sh.ID))
-	return err == nil && s.validUntil(purposeUnlock, unlockSubject(sh), c.Value)
-}
-
-// Unlock verifies the password and sets the unlock cookie.
-func (s *Service) Unlock(w http.ResponseWriter, sh *store.Share, password string) bool {
-	if sh.PasswordHash == "" {
-		return true
-	}
-	if !auth.VerifyPassword(sh.PasswordHash, password) {
-		return false
-	}
-	s.setUntil(w, s.unlockCookieName(sh.ID), purposeUnlock, unlockSubject(sh), time.Now().Add(unlockWindow), sh)
-	return true
-}
-
-// Link is the payload of a short-lived signed URL on the share origin, used
-// for "Open in VLC" and for PDF previews.
-type Link struct {
-	UserID int64 `json:"u"`
-	// Session is the hash of the session that made the link: logging out (or
-	// any other end of that session) revokes the link too.
-	Session []byte `json:"s"`
-	Path    string `json:"p"`
-	// FileID is the identity of the file at Path when the link was made (see
-	// files.FS.FileID): the link is for that file, not for whatever is later
-	// uploaded or moved to the same path.
-	FileID  string `json:"f,omitempty"`
-	Variant string `json:"v,omitempty"`
-	Inline  bool   `json:"i,omitempty"`
-	Expires int64  `json:"e"`
-}
-
-func (s *Service) SignLink(l Link) string {
-	raw, _ := json.Marshal(l)
-	sig := s.Keys.Sign("link", raw)
-	enc := base64.RawURLEncoding
-	return enc.EncodeToString(raw) + "." + enc.EncodeToString(sig[:20])
-}
-
-func (s *Service) VerifyLink(tok string) (*Link, error) {
-	enc := base64.RawURLEncoding
-	a, b, ok := strings.Cut(tok, ".")
-	if !ok {
-		return nil, ErrInvalid
-	}
-	raw, err1 := enc.DecodeString(a)
-	sig, err2 := enc.DecodeString(b)
-	if err1 != nil || err2 != nil || len(sig) != 20 {
-		return nil, ErrInvalid
-	}
-	full := s.Keys.Sign("link", raw)
-	if !auth.ConstantTimeEqual(full[:20], sig) {
-		return nil, ErrInvalid
-	}
-	var l Link
-	if err := json.Unmarshal(raw, &l); err != nil || time.Now().Unix() > l.Expires {
-		return nil, ErrInvalid
-	}
-	return &l, nil
-}
-
-// LinkURL builds the public URL for a signed link to the file now at l.Path
-// (a real path); the file name is appended so external players show a
-// sensible title.
-func (s *Service) LinkURL(l Link, name string) (string, error) {
-	id, err := s.Files.FS.FileID(l.Path)
-	if err != nil {
-		return "", err
-	}
-	l.FileID = id
-	return s.linkURL(l, name), nil
-}
-
-// SameFile reports whether the file at the real path p is still the one l was
-// made for.
-func (s *Service) SameFile(l *Link, p string) bool {
-	id, err := s.Files.FS.FileID(p)
-	return err == nil && id == l.FileID
-}
-
-func (s *Service) linkURL(l Link, name string) string {
-	return s.ShareOrigin + "/x/" + s.SignLink(l) + "/" + httpx.PathEscape(name)
-}
-
-func (s *Service) countedCookieName(id int64) string { return s.cookieName("fbc", id) }
-
-// countedWindow is how long a browser that used a download of a limited
-// link may keep using it (seeking in a video, resuming, listing again)
-// without using another. The cookie is not tied to one browser, so the
-// window is what bounds a copy of it handed to someone else.
-const countedWindow = 24 * time.Hour
-
-// Counted reports whether this browser has used a download of sh recently
-// enough to go on without using another.
-func (s *Service) Counted(r *http.Request, sh *store.Share) bool {
-	c, err := r.Cookie(s.countedCookieName(sh.ID))
-	return err == nil && s.validUntil(purposeCounted, strconv.FormatInt(sh.ID, 10), c.Value)
-}
-
-// MarkCounted records that this browser has used a download of sh.
-func (s *Service) MarkCounted(w http.ResponseWriter, sh *store.Share) {
-	s.setUntil(w, s.countedCookieName(sh.ID), purposeCounted, strconv.FormatInt(sh.ID, 10), time.Now().Add(countedWindow), sh)
-}
-
-// The share origin's cookies are the server's word, signed and dated, about
-// what a browser has done with a share: "<expiry>.<signature>", where the
-// signature is over the subject and the expiry under a purpose of its own.
-const (
-	purposeUnlock  = "share-unlock"
-	purposeCounted = "share-counted"
-	// unlockWindow is how long a share stays unlocked after its password.
-	unlockWindow = 12 * time.Hour
-)
-
-func (s *Service) cookieName(tag string, id int64) string {
-	n := tag + strconv.FormatInt(id, 10)
-	return auth.CookieName(s.Secure, n, n)
-}
-
-func untilMsg(subject string, exp int64) []byte {
-	return []byte(subject + "|" + strconv.FormatInt(exp, 10))
-}
-
-// setUntil sets a cookie vouching for subject until the given time, or
-// until the share expires if that is sooner.
-func (s *Service) setUntil(w http.ResponseWriter, name, purpose, subject string, until time.Time, sh *store.Share) {
-	exp := min(until.Unix(), sh.ExpiresAt.Unix())
-	sig := s.Keys.Sign(purpose, untilMsg(subject, exp))
-	auth.SetCookie(w, auth.Cookie{
-		Name:    name,
-		Value:   strconv.FormatInt(exp, 10) + "." + base64.RawURLEncoding.EncodeToString(sig),
-		Expires: time.Unix(exp, 0), SameSite: http.SameSiteLaxMode,
-	}, s.Secure)
-}
-
-// validUntil checks a value made by setUntil for subject.
-func (s *Service) validUntil(purpose, subject, value string) bool {
-	expStr, sigStr, ok := strings.Cut(value, ".")
-	if !ok {
-		return false
-	}
-	exp, err := strconv.ParseInt(expStr, 10, 64)
-	if err != nil || time.Now().Unix() > exp {
-		return false
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(sigStr)
-	return err == nil && s.Keys.Verify(purpose, untilMsg(subject, exp), sig)
 }
