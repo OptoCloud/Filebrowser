@@ -15,6 +15,7 @@ const (
 	LoginFailed      = "auth.login_failed"
 	LoginBurst       = "auth.login_burst"
 	Logout           = "auth.logout"
+	SessionMoved     = "auth.session_moved"
 	LogoutAll        = "auth.logout_all"
 	TOTPEnabled      = "auth.totp_enabled"
 	TOTPDisabled     = "auth.totp_disabled"

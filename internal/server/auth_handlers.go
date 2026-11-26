@@ -326,6 +326,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"restricted":     s.isRestricted(id),
 		// The password was chosen by someone else: nothing else works until it is replaced.
 		"must_change_password": id.User.MustChangePassword,
+		"session_binding":      s.cfg.Session.Binding && id.User.SessionBinding,
+		"session_binding_off":  !s.cfg.Session.Binding, // turned off for everyone
 		"has_password":         id.User.PasswordHash != "",
 		"oidc":                 idents,
 		"providers":            s.oidc.Providers(),
@@ -480,6 +482,28 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Log(ctx, audit.TOTPDisabled, id.User.Username, nil)
+	httpx.OK(w)
+}
+
+// handleSessionBinding turns the binding of the user's sessions to their
+// browser and network on or off.
+func (s *Server) handleSessionBinding(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	id := httpx.IdentityFrom(r.Context())
+	// Turning a protection off is not for a session that may be a copy.
+	if !req.Enabled && !requireFreshLogin(w, id) {
+		return
+	}
+	if err := s.store.SetSessionBinding(r.Context(), id.User.ID, req.Enabled); err != nil {
+		httpx.InternalError(w, r, err)
+		return
+	}
+	s.audit.Log(r.Context(), audit.SessionMoved, id.User.Username, map[string]any{"binding": req.Enabled})
 	httpx.OK(w)
 }
 

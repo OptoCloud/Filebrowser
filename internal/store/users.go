@@ -24,6 +24,9 @@ type User struct {
 	// MustChangePassword: the password was chosen by someone else, and the
 	// user must replace it before doing anything else.
 	MustChangePassword bool `json:"must_change_password"`
+	// SessionBinding ends the user's sessions when they are used from
+	// another browser or network than they were started from.
+	SessionBinding bool `json:"session_binding"`
 }
 
 func (u *User) IsAdmin() bool     { return u.Role == "admin" }
@@ -34,12 +37,12 @@ type Grant struct {
 	Permission string `json:"permission"` // read or write
 }
 
-const userCols = `id, username, password_hash, role, quota_bytes, totp_secret, totp_pending, totp_last_step, created_at, disabled, mfa_exempt, must_change_password`
+const userCols = `id, username, password_hash, role, quota_bytes, totp_secret, totp_pending, totp_last_step, created_at, disabled, mfa_exempt, must_change_password, session_binding`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.QuotaBytes,
-		&u.TOTPSecret, &u.TOTPPending, &u.TOTPLastStep, &u.CreatedAt, &u.Disabled, &u.MFAExempt, &u.MustChangePassword)
+		&u.TOTPSecret, &u.TOTPPending, &u.TOTPLastStep, &u.CreatedAt, &u.Disabled, &u.MFAExempt, &u.MustChangePassword, &u.SessionBinding)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -101,6 +104,10 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, up UserUpdate) error {
 		disabled = COALESCE($4, disabled),
 		mfa_exempt = COALESCE($5, mfa_exempt)
 		WHERE id = $1`, id, up.Role, up.QuotaBytes, up.Disabled, up.MFAExempt))
+}
+
+func (s *Store) SetSessionBinding(ctx context.Context, id int64, on bool) error {
+	return affected(s.pool.Exec(ctx, `UPDATE users SET session_binding = $2 WHERE id = $1`, id, on))
 }
 
 // SetPassword stores a new password hash. mustChange says the password was

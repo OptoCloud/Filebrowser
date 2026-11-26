@@ -28,6 +28,10 @@ export interface OIDCIdentity {
 }
 
 export interface Me {
+  /** Sessions end when used from another browser or network than they started from. */
+  session_binding?: boolean;
+  /** The server has session binding turned off for everyone. */
+  session_binding_off?: boolean;
   /** The password was chosen by someone else and must be replaced first. */
   must_change_password?: boolean;
   /** Set when the server has an upload bucket: files from this size go through it. */

@@ -78,6 +78,10 @@ type Config struct {
 type Session struct {
 	IdleTimeout     Duration `toml:"idle_timeout"`
 	AbsoluteTimeout Duration `toml:"absolute_timeout"`
+	// Binding ends a session used from another browser or network than it
+	// was started from (users can turn it off for themselves). Set it to
+	// false to turn it off for everyone.
+	Binding bool `toml:"binding"`
 }
 
 type Trash struct {
@@ -188,6 +192,7 @@ func Default() Config {
 		Session: Session{
 			IdleTimeout:     Duration{7 * 24 * time.Hour},
 			AbsoluteTimeout: Duration{30 * 24 * time.Hour},
+			Binding:         true,
 		},
 		Trash: Trash{RetentionDays: 30},
 		Shares: Shares{DefaultExpiry: Duration{7 * 24 * time.Hour}, MaxExpiry: Duration{90 * 24 * time.Hour},

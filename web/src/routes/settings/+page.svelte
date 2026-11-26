@@ -52,6 +52,16 @@
     }
   }
 
+  async function setBinding(enabled: boolean) {
+    revokeErr = '';
+    try {
+      await post('/api/me/session-binding', { enabled });
+    } catch (x) {
+      revokeErr = errorMessage(x);
+    }
+    await invalidate('app:me');
+  }
+
   async function changePassword(e: Event) {
     e.preventDefault();
     pwErr = pwMsg = '';
@@ -280,6 +290,17 @@
         </button>
       </div>
       {#if sessErr}<div class="error" role="alert">{sessErr}</div>{/if}
+      {#if !me.session_binding_off}
+        <label class="inline small">
+          <input
+            type="checkbox"
+            checked={me.session_binding}
+            onchange={(e) => setBinding(e.currentTarget.checked)}
+          />
+          End a session that is used from another browser or network than it was started from. Turn this
+          off if you are logged out when your phone changes networks.
+        </label>
+      {/if}
       <ul class="plain">
         {#each sessions as s (s.id)}
           <li class="row">

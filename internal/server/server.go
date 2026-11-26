@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -259,6 +260,17 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*httpx.Id
 		httpx.ErrorCode(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
 		return nil, false
 	}
+	if s.cfg.Session.Binding && user.SessionBinding {
+		if why := sessionMoved(sess, r.UserAgent(), httpx.IP(r.Context())); why != "" {
+			// A session cookie in another browser or on another network is
+			// most likely a copied one: it ends here.
+			_ = s.store.DeleteSession(r.Context(), sess.IDHash)
+			s.sessions.ClearCookie(w)
+			s.audit.LogUser(r.Context(), &user.ID, audit.SessionMoved, user.Username, map[string]any{"reason": why, "from": sess.IP})
+			httpx.ErrorCode(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
+			return nil, false
+		}
+	}
 	access, err := files.AccessFor(r.Context(), s.store, user)
 	if err != nil {
 		httpx.InternalError(w, r, err)
@@ -266,6 +278,39 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*httpx.Id
 	}
 	return &httpx.Identity{User: user, Session: sess, Access: access}, true
 }
+
+// sessionMoved says why a session is being used from somewhere other than
+// where it was started ("" if it is not): another browser, or another
+// network. A browser is told apart by its User-Agent without the version
+// numbers, so an update does not end the session; a network is the /16 of an
+// IPv4 address or the /32 of an IPv6 one, so a changed address at the same
+// provider usually does not either.
+func sessionMoved(sess *store.Session, userAgent, ip string) string {
+	if len(userAgent) > 256 {
+		userAgent = userAgent[:256]
+	}
+	if sess.UserAgent != "" && versionless(sess.UserAgent) != versionless(userAgent) {
+		return "browser"
+	}
+	from, err1 := netip.ParseAddr(sess.IP)
+	now, err2 := netip.ParseAddr(ip)
+	if err1 != nil || err2 != nil {
+		return "" // not known at login, or not now
+	}
+	from, now = from.Unmap(), now.Unmap()
+	bits := 16
+	if from.Is6() {
+		bits = 32
+	}
+	if p, err := from.Prefix(bits); err != nil || !p.Contains(now) {
+		return "network"
+	}
+	return ""
+}
+
+var versionNumbers = regexp.MustCompile(`[0-9]+([._][0-9]+)*`)
+
+func versionless(ua string) string { return versionNumbers.ReplaceAllString(ua, "") }
 
 // requiresTOTP: a second factor is required for admins, and for anyone who
 // can upload or create shares unless an admin exempted them.

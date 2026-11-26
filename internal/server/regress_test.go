@@ -893,3 +893,43 @@ func TestMustChangePassword(t *testing.T) {
 		t.Fatal("a user made without an administrator's password must change it")
 	}
 }
+
+// A session is bound to the browser and network it was started from.
+func TestSessionBinding(t *testing.T) {
+	for _, tc := range []struct {
+		ua, ip, toUA, toIP, want string
+	}{
+		{"Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36", "203.0.113.5", "Mozilla/5.0 Chrome/132.0.0.0 Safari/537.36", "203.0.113.77", ""}, // an update, a new lease
+		{"Mozilla/5.0 Chrome/131.0.0.0", "203.0.113.5", "curl/8.5.0", "203.0.113.5", "browser"},
+		{"Mozilla/5.0 Chrome/131.0.0.0", "203.0.113.5", "Mozilla/5.0 Chrome/131.0.0.0", "198.51.100.5", "network"},
+		{"Mozilla/5.0 Chrome/131.0.0.0", "203.0.113.5", "Mozilla/5.0 Chrome/131.0.0.0", "203.0.200.5", ""}, // same /16
+		{"UA", "2001:db8:1::1", "UA", "2001:db8:ffff::2", ""},
+		{"UA", "2001:db8:1::1", "UA", "2001:db9::1", "network"},
+		{"UA", "", "UA", "198.51.100.5", ""}, // not known at login
+	} {
+		if got := sessionMoved(&store.Session{UserAgent: tc.ua, IP: tc.ip}, tc.toUA, tc.toIP); got != tc.want {
+			t.Errorf("sessionMoved(%q %s -> %q %s) = %q, want %q", tc.ua, tc.ip, tc.toUA, tc.toIP, got, tc.want)
+		}
+	}
+
+	h := newHarness(t)
+	h.user("vic", "user", store.Grant{Path: "vic", Permission: "read"})
+	c := h.login("vic") // from 192.0.2.1
+	expect(t, c.do("GET", "/api/me", nil), 200)
+	// The cookie used from another network ends the session, for the first holder too.
+	thief := h.app()
+	thief.cookies, thief.ip = c.cookies, "198.51.100.9"
+	expect(t, thief.do("GET", "/api/me", nil), 401)
+	c2 := h.app()
+	c2.cookies = c.cookies
+	expect(t, c2.do("GET", "/api/me", nil), 401)
+
+	// A user can turn it off for their account (from a fresh login).
+	c = h.login("vic")
+	expect(t, c.do("POST", "/api/me/session-binding", map[string]bool{"enabled": false}), 200)
+	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["session_binding"] != false {
+		t.Fatalf("me = %v", me["session_binding"])
+	}
+	c.ip = "198.51.100.9"
+	expect(t, c.do("GET", "/api/me", nil), 200)
+}
