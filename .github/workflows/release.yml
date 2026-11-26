@@ -48,7 +48,7 @@ jobs:
       - name: Build web
         working-directory: web
         run: |
-          npm install -g "$(node -p "require('./package.json').packageManager")"
+          ../.github/ci/install-pnpm.sh package.json
           pnpm install --frozen-lockfile
           pnpm run build
       - name: Build binaries

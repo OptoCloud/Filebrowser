@@ -37,6 +37,8 @@ RestrictRealtime=yes
 # RestrictSUIDSGID is omitted: it breaks bubblewrap 0.12 bind mounts (ENOSYS), and
 # NoNewPrivileges plus the empty CapabilityBoundingSet already make setuid bits inert.
 LockPersonality=yes
+RemoveIPC=yes
+KeyringMode=private
 MemoryDenyWriteExecute=no
 # AF_NETLINK: bubblewrap configures loopback in the sandbox's own network namespace.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

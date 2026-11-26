@@ -4,7 +4,9 @@ name: filebrowser
 
 services:
   filebrowser:
-    image: ghcr.io/optocloud/filebrowser:latest
+    # Pin a release (and its digest, shown by `docker buildx imagetools inspect`)
+    # instead of latest to choose when to update.
+    image: ghcr.io/optocloud/filebrowser:${FB_VERSION:-latest}
     # build: ../..   # or build from this checkout
     restart: unless-stopped
     depends_on:
@@ -23,17 +25,23 @@ services:
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
+    # Bounds on what a runaway (or exploited) process can take from the host.
+    pids_limit: 512
+    mem_limit: ${FB_MEMORY:-8g}
     # The ffmpeg sandbox (bubblewrap) builds unprivileged user namespaces.
     # The seccomp profile is Docker's default plus the namespace and mount
     # syscalls it needs; Docker's AppArmor profile forbids mount entirely.
     # Never add capabilities or "privileged" instead.
     security_opt:
+      - no-new-privileges:true
       - seccomp=./seccomp-bwrap.json
       - apparmor=unconfined
 
   postgres:
-    image: postgres:17-trixie
+    image: postgres:17-trixie@sha256:87c8b42f423b45d5247e6aa8fdb2e7762fec164c68a50fe3eb07e7bfcaf4dbcf
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: filebrowser
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

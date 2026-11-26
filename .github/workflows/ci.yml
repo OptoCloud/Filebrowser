@@ -21,8 +21,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.nvmrc
-      - name: Install pnpm (version from packageManager)
-        run: npm install -g "$(node -p "require('./package.json').packageManager")"
+      - name: Install pnpm (version and hash from packageManager)
+        run: ../.github/ci/install-pnpm.sh package.json
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
       - run: pnpm run check
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
         env:
           POSTGRES_USER: filebrowser
           POSTGRES_PASSWORD: ci
@@ -71,7 +71,7 @@ jobs:
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             -e FB_TEST_DATABASE_URL \
             -v "$GITHUB_WORKSPACE:/src:ro" -v "$(go env GOROOT):/usr/local/go:ro" -v "$(go env GOMODCACHE):/gomod:ro" \
-            debian:13 bash /src/.github/ci/debian-test.sh
+            debian:13@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2 bash /src/.github/ci/debian-test.sh
       - name: gosec
         run: go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -exclude-generated ./...
       - name: govulncheck
@@ -81,7 +81,7 @@ jobs:
   semgrep:
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep:1.187.0@sha256:0c8dfa7aa1ca8c50233ec9110e8cd88d139dedd603d56507493f74c6f4b3e062
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: semgrep scan --config p/golang --config p/javascript --config p/secrets --error
