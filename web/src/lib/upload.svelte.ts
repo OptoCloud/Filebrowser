@@ -79,6 +79,11 @@ function tusStatus(err: Error): number {
   );
 }
 
+/** Whether an item is still on its way: waiting, being sent, or being fetched by the server. */
+export function isActive(item: UploadItem): boolean {
+  return item.status === 'queued' || item.status === 'uploading' || item.status === 'finishing';
+}
+
 /** A queue of tus uploads with reactive progress. */
 export class Uploader {
   items = $state<UploadItem[]>([]);
@@ -112,9 +117,7 @@ export class Uploader {
   }
 
   get busy(): boolean {
-    return this.items.some(
-      (i) => i.status === 'queued' || i.status === 'uploading' || i.status === 'finishing'
-    );
+    return this.items.some(isActive);
   }
 
   /** Number of tus uploads currently started and not yet finished. */
@@ -297,11 +300,7 @@ export class Uploader {
 
   cancel(id: number) {
     const item = this.items.find((i) => i.id === id);
-    if (
-      !item ||
-      (item.status !== 'queued' && item.status !== 'uploading' && item.status !== 'finishing')
-    )
-      return;
+    if (!item || !isActive(item)) return;
     const wasActive = item.status !== 'queued';
     item.status = 'cancelled';
     this.aborters.get(id)?.abort(new DOMException('cancelled', 'AbortError'));
@@ -338,9 +337,7 @@ export class Uploader {
   }
 
   clearFinished() {
-    this.items = this.items.filter(
-      (i) => i.status === 'queued' || i.status === 'uploading' || i.status === 'finishing'
-    );
+    this.items = this.items.filter(isActive);
     this.retryable.clear();
   }
 }

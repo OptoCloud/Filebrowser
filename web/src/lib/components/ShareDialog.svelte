@@ -158,7 +158,7 @@
             bind:value={maxFileGB}
           />
         </label>
-        <fieldset class="field-row">
+        <fieldset class="checks">
           <legend>Accept only (nothing ticked accepts any file)</legend>
           {#each kinds as k (k.value)}
             <label class="inline">
@@ -233,15 +233,6 @@
     flex-direction: column;
     gap: 0.4rem;
     margin-bottom: 0.8rem;
-  }
-  fieldset {
-    border: 0;
-    padding: 0;
-    margin-inline: 0;
-  }
-  legend {
-    padding: 0;
-    margin-bottom: 0.3rem;
   }
   details {
     margin: 0.8rem 0;

@@ -148,7 +148,7 @@
             ? 'As an administrator you may also use http and addresses on the local network.'
             : 'Must be https and reachable from the internet.'}
         </p>
-        <fieldset>
+        <fieldset class="checks">
           <legend>Call it when</legend>
           {#each Object.entries(eventNames) as [value, label] (value)}
             <label class="inline">
@@ -194,19 +194,6 @@
 {/if}
 
 <style>
-  fieldset {
-    border: 0;
-    padding: 0;
-    margin: 0 0 0.8rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    align-items: flex-start;
-  }
-  legend {
-    padding: 0;
-    margin-bottom: 0.3rem;
-  }
   code {
     font-size: 0.85em;
   }

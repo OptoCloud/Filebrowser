@@ -6,7 +6,10 @@
   import { download, errorMessage, get, post, postForm, qs } from '#lib/api.js';
   import { formatDate, formatSize, parentPath, pathCrumbs } from '#lib/format.js';
   import { filesHref, previewHref } from '#lib/nav.js';
+  import { PREF, loadPref, savePref } from '#lib/prefs.js';
+  import { type SortKey, sortEntries } from '#lib/sort.js';
   import { LatestRequest } from '#lib/latest.js';
+  import { isTyping, moveTarget, perRow } from '#lib/listkeys.js';
   import type { Entry } from '#lib/types.js';
   import type { PageProps } from './$types';
   import { appUploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
@@ -18,8 +21,7 @@
   import Modal from '#lib/components/Modal.svelte';
   import Preview from '#lib/components/Preview.svelte';
   import ShareDialog from '#lib/components/ShareDialog.svelte';
-
-  type SortKey = 'name' | 'size' | 'mtime';
+  import VersionsDialog from '#lib/components/VersionsDialog.svelte';
 
   // The listing comes from the load function (+page.ts), so it is there
   // before the folder is shown.
@@ -29,9 +31,9 @@
   const err = $derived(data.loadError);
   let actionErr = $state('');
 
-  let view = $state<'list' | 'grid'>(loadPref('fb.view', 'list') as 'list' | 'grid');
-  let sortKey = $state<SortKey>(loadPref('fb.sort', 'name') as SortKey);
-  let sortAsc = $state(loadPref('fb.asc', '1') === '1');
+  let view = $state<'list' | 'grid'>(loadPref(PREF.view, 'list') as 'list' | 'grid');
+  let sortKey = $state<SortKey>(loadPref(PREF.sortKey, 'name') as SortKey);
+  let sortAsc = $state(loadPref(PREF.sortAsc, '1') === '1');
   const selected = new SvelteSet<string>();
   let anchor = -1;
 
@@ -63,7 +65,6 @@
   let sizesPartial = $state(false);
   // The file whose earlier versions (from snapshots) are shown.
   let versionsOf = $state<Entry | null>(null);
-  let versions = $state<{ snapshot: string; size: number; mtime: string }[] | null>(null);
   let dragging = $state(0);
 
   let fileInput: HTMLInputElement | undefined = $state();
@@ -72,21 +73,6 @@
   let browser: HTMLElement | undefined = $state();
 
   const searchReq = new LatestRequest();
-
-  function loadPref(k: string, d: string): string {
-    try {
-      return localStorage.getItem(k) ?? d;
-    } catch {
-      return d;
-    }
-  }
-  function savePref(k: string, v: string) {
-    try {
-      localStorage.setItem(k, v);
-    } catch {
-      /* storage unavailable */
-    }
-  }
 
   const reload = () => invalidate('app:files');
 
@@ -121,21 +107,7 @@
   });
 
   const writable = $derived(listing?.permission === 'write');
-  const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-  const entries = $derived.by(() => {
-    const list = results ?? listing?.entries ?? [];
-    const dir = sortAsc ? 1 : -1;
-    // Dates are parsed once, not in every comparison: folders can be large.
-    const time = new Map(sortKey === 'mtime' ? list.map((e) => [e, Date.parse(e.mtime)]) : []);
-    return [...list].sort((a, b) => {
-      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-      let c = 0;
-      if (sortKey === 'size') c = a.size - b.size;
-      else if (sortKey === 'mtime') c = (time.get(a) ?? 0) - (time.get(b) ?? 0);
-      if (c === 0) c = byName.compare(a.name, b.name);
-      return c * dir;
-    });
-  });
+  const entries = $derived(sortEntries(results ?? listing?.entries ?? [], sortKey, sortAsc));
   const crumbs = $derived(pathCrumbs(path));
   const selection = $derived(entries.filter((e) => selected.has(e.path)));
   // In a traverse-only directory every child is a grant root (or leads to one).
@@ -148,8 +120,8 @@
       sortKey = k;
       sortAsc = k === 'name';
     }
-    savePref('fb.sort', sortKey);
-    savePref('fb.asc', sortAsc ? '1' : '0');
+    savePref(PREF.sortKey, sortKey);
+    savePref(PREF.sortAsc, sortAsc ? '1' : '0');
   }
 
   const ariaSort = (k: SortKey) =>
@@ -157,7 +129,7 @@
 
   function setView(v: 'list' | 'grid') {
     view = v;
-    savePref('fb.view', v);
+    savePref(PREF.view, v);
   }
 
   function toggle(e: Entry, i: number, ev: MouseEvent | KeyboardEvent) {
@@ -203,33 +175,19 @@
   function onkeydown(ev: KeyboardEvent) {
     const t = ev.target as HTMLElement | null;
     if (ev.defaultPrevented || !t || !browser || document.querySelector('dialog[open]')) return;
-    const typing =
-      t.isContentEditable ||
-      t.tagName === 'TEXTAREA' ||
-      t.tagName === 'SELECT' ||
-      (t.tagName === 'INPUT' && (t as HTMLInputElement).type !== 'checkbox');
-    if (typing) return;
+    if (isTyping(t)) return;
     const els = Array.from(browser.querySelectorAll<HTMLElement>('[data-entry]'));
     const at = els.indexOf(document.activeElement as HTMLElement);
-    const focus = (i: number) => els[Math.max(0, Math.min(els.length - 1, i))]?.focus();
-    // In the grid, up and down move by a row: as many tiles as share the first one's top.
-    const perRow = () => {
-      if (view === 'list' || !els.length) return 1;
-      const top = els[0].getBoundingClientRect().top;
-      const n = els.findIndex((el) => el.getBoundingClientRect().top > top + 1);
-      return n < 0 ? els.length : n;
-    };
+    const plain = !(ev.ctrlKey || ev.metaKey || ev.altKey);
+    const move = plain
+      ? moveTarget(ev.key, at, els.length, view === 'grid' ? perRow(els) : 1)
+      : null;
     let handled = true;
     if (ev.key === '/') searchInput?.focus();
     else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'a')
       entries.forEach((e) => selected.add(e.path));
-    else if (ev.ctrlKey || ev.metaKey || ev.altKey) handled = false;
-    else if (ev.key === 'ArrowDown') focus(at < 0 ? 0 : at + perRow());
-    else if (ev.key === 'ArrowUp') focus(at < 0 ? 0 : at - perRow());
-    else if (ev.key === 'ArrowRight' && view === 'grid') focus(at + 1);
-    else if (ev.key === 'ArrowLeft' && view === 'grid') focus(at - 1);
-    else if (ev.key === 'Home') focus(0);
-    else if (ev.key === 'End') focus(els.length - 1);
+    else if (!plain) handled = false;
+    else if (move !== null) els[move]?.focus();
     else if (ev.key === ' ' && at >= 0) toggle(entries[at], at, ev);
     else if (ev.key === 'Escape' && selected.size) selected.clear();
     else if ((ev.key === 'Delete' || ev.key === 'F2') && canModify) {
@@ -265,19 +223,6 @@
       sizesPartial = r.partial;
     } catch (e) {
       actionErr = errorMessage(e);
-    }
-  }
-
-  async function showVersions(e: Entry) {
-    versionsOf = e;
-    versions = null;
-    try {
-      versions = (
-        await get<{ versions: typeof versions }>('/api/files/versions' + qs({ path: e.path }))
-      ).versions;
-    } catch (x) {
-      versionsOf = null;
-      actionErr = errorMessage(x);
     }
   }
 
@@ -431,7 +376,7 @@
         <Icon name="download" size={16} />Download
       </button>
       {#if selection.length === 1 && !selection[0].is_dir && page.data.me?.snapshots}
-        <button class="small" onclick={() => showVersions(selection[0])}>Versions</button>
+        <button class="small" onclick={() => (versionsOf = selection[0])}>Versions</button>
       {/if}
       {#if canModifySelection}
         {#if selection.length === 1}
@@ -714,36 +659,7 @@
 {/if}
 
 {#if versionsOf}
-  <Modal title="Earlier versions of “{versionsOf.name}”" onclose={() => (versionsOf = null)}>
-    {#if versions === null}
-      <p class="muted">Looking through the snapshots…</p>
-    {:else if versions.length === 0}
-      <p class="muted">The snapshots hold no other version of this file.</p>
-    {:else}
-      <ul class="plain">
-        {#each versions as v (v.snapshot)}
-          <li class="row small">
-            <span>
-              {formatDate(v.mtime)} · {formatSize(v.size)}
-              <br /><span class="muted">snapshot {v.snapshot}</span>
-            </span>
-            <span class="spacer"></span>
-            <a
-              class="btn small"
-              href={'/api/files/version' + qs({ path: versionsOf.path, snapshot: v.snapshot })}
-              rel="external"
-              download
-            >
-              Download
-            </a>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-    {#snippet footer()}
-      <button class="primary" onclick={() => (versionsOf = null)}>Close</button>
-    {/snippet}
-  </Modal>
+  <VersionsDialog entry={versionsOf} onclose={() => (versionsOf = null)} />
 {/if}
 
 {#if shareEntry}

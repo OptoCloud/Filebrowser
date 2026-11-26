@@ -7,6 +7,7 @@
   import { formatDate, formatSize, isViewableImage, kindOf, pathCrumbs } from '#lib/format.js';
   import { LatestRequest } from '#lib/latest.js';
   import { shareHref } from '#lib/nav.js';
+  import { PREF, loadPref, savePref } from '#lib/prefs.js';
   import type { Entry, ShareInfo } from '#lib/types.js';
   import { Uploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
   import EntryIcon from '#lib/components/EntryIcon.svelte';
@@ -37,24 +38,13 @@
   let fileInput: HTMLInputElement | undefined = $state();
   let dragging = $state(0);
   // Drop links that ask for it: the uploader's name, kept for the next visit.
-  let uploaderName = $state(loadName());
+  let uploaderName = $state(loadPref(PREF.uploader, ''));
   const nameNeeded = $derived(!!info?.ask_name && !uploaderName.trim());
 
-  function loadName(): string {
-    try {
-      return localStorage.getItem('fb.uploader') ?? '';
-    } catch {
-      return '';
-    }
-  }
   function setExtra() {
     if (!uploader || !info?.ask_name) return;
     uploader.extra = { uploader: uploaderName.trim() };
-    try {
-      localStorage.setItem('fb.uploader', uploaderName.trim());
-    } catch {
-      /* storage unavailable */
-    }
+    savePref(PREF.uploader, uploaderName.trim());
   }
 
   async function loadInfo() {

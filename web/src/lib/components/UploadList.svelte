@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatSize } from '#lib/format.js';
-  import type { UploadItem, Uploader } from '#lib/upload.svelte.js';
+  import { type UploadItem, type Uploader, isActive } from '#lib/upload.svelte.js';
   import Icon from './Icon.svelte';
 
   let { uploader }: { uploader: Uploader } = $props();
@@ -25,7 +25,7 @@
           {:else if it.status === 'cancelled'}cancelled
           {/if}
         </span>
-        {#if it.status === 'uploading' || it.status === 'queued' || it.status === 'finishing'}
+        {#if isActive(it)}
           <button
             class="icon"
             onclick={() => uploader.cancel(it.id)}

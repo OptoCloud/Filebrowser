@@ -166,7 +166,7 @@
             placeholder="e.g. Scanner, backup script"
           />
         </label>
-        <fieldset>
+        <fieldset class="checks">
           <legend>Folders</legend>
           <label class="inline">
             <input type="checkbox" bind:checked={everything} /> Everything I can access
@@ -191,7 +191,7 @@
             </button>
           {/if}
         </fieldset>
-        <fieldset>
+        <fieldset class="checks">
           <legend>May</legend>
           {#each Object.entries(capNames) as [value, label] (value)}
             <label class="inline">
@@ -243,19 +243,6 @@
 {/if}
 
 <style>
-  fieldset {
-    border: 0;
-    padding: 0;
-    margin: 0 0 0.8rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    align-items: flex-start;
-  }
-  legend {
-    padding: 0;
-    margin-bottom: 0.3rem;
-  }
   code {
     font-size: 0.85em;
   }
