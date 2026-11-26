@@ -26,7 +26,7 @@ Licensed under the [GNU AGPL v3](LICENSE).
   live HLS for video the browser cannot play as is (repackaged, audio converted
   to AAC if needed), WebVTT subtitles, "Open in VLC" signed URLs).
 - API tokens scoped to folders and capabilities, and one-request uploads for
-  curl, ShareX and the like.
+  curl, ShareX and the like; signed webhooks on uploads and share use.
 - Admin page: users, grants, quotas, sessions, invites, tokens, audit log.
 
 ## Access model
@@ -61,6 +61,25 @@ curl -F file=@shot.png -H "Authorization: Bearer $TOKEN" "https://files.example.
 
 A request body is as large as the proxy in front allows (100 MB behind
 Cloudflare); larger files go through tus (`/api/uploads/`).
+
+## Webhooks
+
+Under Settings a user can register addresses the server calls when something
+happens to their files: `file.uploaded`, `drop.received` (through one of their
+drop links), `share.created`, `share.accessed`, optionally only below a folder.
+A call is a POST of JSON:
+
+```json
+{ "id": "…", "event": "drop.received", "time": "2026-11-26T12:00:00Z", "path": "inbox/scan.pdf", "data": { "size": 48213, "share_id": 7 } }
+```
+
+with `X-Fb-Event`, `X-Fb-Delivery`, `X-Fb-Timestamp` and `X-Fb-Signature:
+sha256=<hex>`, the HMAC-SHA256 of `<timestamp>.<body>` under the hook's secret
+(shown once, when it is made). Check the signature, and that the timestamp is
+recent, before acting on a call. A call is tried three times; a hook that fails
+twenty times in a row is disabled. Hooks must use https and a public address,
+except an administrator's, which may also call into the local network. Redirects
+are not followed.
 
 ## Development
 

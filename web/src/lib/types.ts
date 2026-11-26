@@ -157,6 +157,21 @@ export interface ApiToken {
   owner?: string;
 }
 
+export interface Webhook {
+  id: number;
+  name: string;
+  url: string;
+  events: string[];
+  /** Only events at or below this path; '' is everywhere. */
+  path: string;
+  created_at: string;
+  disabled: boolean;
+  last_at: string | null;
+  last_status: number;
+  last_error: string;
+  failures: number;
+}
+
 export interface Session {
   id: string;
   user_id: number;

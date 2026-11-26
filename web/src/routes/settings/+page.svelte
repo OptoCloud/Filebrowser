@@ -7,6 +7,7 @@
   import type { Session } from '#lib/types.js';
   import Modal from '#lib/components/Modal.svelte';
   import TokensCard from '#lib/components/TokensCard.svelte';
+  import WebhooksCard from '#lib/components/WebhooksCard.svelte';
 
   let { data } = $props();
 
@@ -260,7 +261,10 @@
       </div>
     {/if}
 
-    {#if !me.restricted}<TokensCard />{/if}
+    {#if !me.restricted}
+      <TokensCard />
+      <WebhooksCard admin={me.user.role === 'admin'} />
+    {/if}
 
     <div class="card">
       <div class="row">

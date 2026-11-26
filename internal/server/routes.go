@@ -43,6 +43,10 @@ func (s *Server) routes() {
 	s.handle("GET /api/me/tokens", s.handleListTokens)
 	s.handle("POST /api/me/tokens", s.handleCreateToken)
 	s.handle("DELETE /api/me/tokens/{id}", s.handleRevokeToken)
+	s.handle("GET /api/me/webhooks", s.handleListWebhooks)
+	s.handle("POST /api/me/webhooks", s.handleCreateWebhook)
+	s.handle("DELETE /api/me/webhooks/{id}", s.handleDeleteWebhook)
+	s.handle("POST /api/me/webhooks/{id}/test", s.handleTestWebhook)
 
 	// Files.
 	s.handle("GET /api/files", s.handleList, token(capRead))

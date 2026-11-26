@@ -23,6 +23,7 @@ import (
 	"filebrowser/internal/shares"
 	"filebrowser/internal/store"
 	"filebrowser/internal/uploads"
+	"filebrowser/internal/webhooks"
 )
 
 // Deps are the services the server needs.
@@ -60,6 +61,7 @@ type Server struct {
 	shareLimiter *auth.RateLimiter
 	dropLimiter  *auth.RateLimiter
 	tokenLimiter *auth.RateLimiter
+	hooks        *webhooks.Dispatcher
 	inviteLimit  *auth.RateLimiter
 	passkeyLimit *auth.RateLimiter
 	// ceremonyLimit caps the security-key ceremonies one user can start: they
@@ -172,6 +174,8 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s.static.shareCard = s.shareCard
+	s.hooks = webhooks.New(d.Store, d.Keys)
+	s.audit.Notify = s.notifyHooks
 	s.routes()
 	return s, nil
 }
@@ -270,6 +274,7 @@ func (s *Server) Handler() http.Handler {
 
 // Janitor runs periodic cleanup until ctx is done.
 func (s *Server) Janitor(ctx context.Context) {
+	s.hooks.Run(ctx)
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {

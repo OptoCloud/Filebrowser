@@ -35,6 +35,8 @@ const (
 	ShareUpload      = "share.upload"
 	TokenCreated     = "token.created"
 	TokenRevoked     = "token.revoked"
+	WebhookCreated   = "webhook.created"
+	WebhookDeleted   = "webhook.deleted"
 	FileDelete       = "file.delete"
 	FileRestore      = "file.restore"
 	FilePurge        = "file.purge"
@@ -52,6 +54,9 @@ const (
 
 type Logger struct {
 	Store *store.Store
+	// Notify, if set, is told of every event after it is recorded (it
+	// feeds the webhooks). It must not block.
+	Notify func(ctx context.Context, userID *int64, action, target string, details any)
 }
 
 // Log records an event. The acting user and IP come from ctx when present.
@@ -82,5 +87,8 @@ func (l *Logger) LogUser(ctx context.Context, userID *int64, action, target stri
 	slog.InfoContext(ctx, "audit", "action", action, "target", target, "ip", ip, "user_id", uid)
 	if err := l.Store.AddAudit(context.WithoutCancel(ctx), userID, ip, action, target, details); err != nil {
 		slog.ErrorContext(ctx, "audit write failed", "err", err, "action", action)
+	}
+	if l.Notify != nil {
+		l.Notify(ctx, userID, action, target, details)
 	}
 }
