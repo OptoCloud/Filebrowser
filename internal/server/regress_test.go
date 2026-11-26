@@ -1,11 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -624,5 +627,212 @@ func TestPendingLoginFromCookie(t *testing.T) {
 	rec := c.do("POST", "/api/auth/login/totp", body)
 	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "login_expired") {
 		t.Fatalf("pending login from the cookie: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// An API token acts within the part of its user's access it was made for,
+// on the routes that take tokens, and nowhere else.
+func TestAPITokens(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("omar", "user", store.Grant{Path: "omar", Permission: "write"}, store.Grant{Path: "lib", Permission: "read"})
+	write(t, h.root, "omar/in/a.txt", "a")
+	write(t, h.root, "omar/private/p.txt", "p")
+	write(t, h.root, "lib/book.txt", "b")
+	write(t, h.root, "other/x.txt", "x")
+
+	// Made from a fresh session only, within what the user has.
+	mk := map[string]any{"name": "scanner", "paths": []string{"omar/in"}, "caps": []string{"upload"}}
+	expect(t, h.session(u, time.Hour).do("POST", "/api/me/tokens", mk), 401)
+	c := h.session(u, time.Minute)
+	for _, bad := range []map[string]any{
+		{"name": "x", "paths": []string{"other"}, "caps": []string{"read"}},
+		{"name": "x", "paths": []string{"lib"}, "caps": []string{"upload"}}, // read-only grant
+		{"name": "x", "paths": []string{"omar"}, "caps": []string{"admin"}},
+		{"name": "x", "paths": []string{"omar"}, "caps": []string{}},
+		{"name": "", "paths": []string{"omar"}, "caps": []string{"read"}},
+		{"name": "x", "paths": []string{"omar"}, "caps": []string{"read"}, "allowed_ips": []string{"nonsense"}},
+	} {
+		if rec := c.do("POST", "/api/me/tokens", bad); rec.Code < 400 {
+			t.Errorf("token %v: %d", bad, rec.Code)
+		}
+	}
+	created := decode[map[string]any](t, c.do("POST", "/api/me/tokens", mk))
+	upload, _ := created["token"].(string)
+	if !strings.HasPrefix(upload, "fbt_") {
+		t.Fatalf("created = %v", created)
+	}
+	mk = map[string]any{"name": "reader", "paths": []string{""}, "caps": []string{"read"}, "allowed_ips": []string{"192.0.2.0/24"}}
+	reader, _ := decode[map[string]any](t, c.do("POST", "/api/me/tokens", mk))["token"].(string)
+
+	api := func(tok string) *client {
+		a := h.app()
+		a.origin = "" // a script: no browser, no Origin
+		a.headers["Authorization"] = "Bearer " + tok
+		return a
+	}
+	// The upload token uploads into its folder, and does nothing else.
+	up := api(upload)
+	rec, _ := up.tusUpload("/api/uploads/", "omar/in", "scan.txt", "scanned")
+	expect(t, rec, 204)
+	rec, _ = up.tusUpload("/api/uploads/", "omar/private", "scan.txt", "x")
+	expect(t, rec, 403)
+	expect(t, up.do("POST", "/api/files/mkdir", map[string]string{"path": "omar/in", "name": "2026"}), 200)
+	expect(t, up.do("GET", "/api/files?path=omar/in", nil), 403)                                           // no read
+	expect(t, up.do("POST", "/api/files/delete", map[string]any{"paths": []string{"omar/in/a.txt"}}), 403) // no modify
+	// No token reaches the account, the admin pages or a session.
+	for _, p := range []string{"/api/me", "/api/me/tokens", "/api/me/sessions", "/api/admin/users", "/api/trash"} {
+		if rec := up.do("GET", p, nil); rec.Code != 403 || !strings.Contains(rec.Body.String(), "token_not_accepted") {
+			t.Errorf("GET %s with a token: %d %s", p, rec.Code, rec.Body.String())
+		}
+	}
+	expect(t, up.do("POST", "/api/me/password", map[string]string{"current": "x", "new": "y"}), 403)
+
+	// The read token reads all its user can, from its addresses, read-only.
+	rd := api(reader)
+	expect(t, rd.do("GET", "/api/files/download?path=omar/private/p.txt", nil), 200)
+	expect(t, rd.do("GET", "/api/files/download?path=lib/book.txt", nil), 200)
+	expect(t, rd.do("GET", "/api/files/download?path=other/x.txt", nil), 404) // as for its user: not there
+	rec, _ = rd.tusUpload("/api/uploads/", "omar/in", "nope.txt", "x")
+	expect(t, rec, 403)
+	rd.ip = "198.51.100.7"
+	expect(t, rd.do("GET", "/api/files?path=omar", nil), 403)
+	rd.ip = ""
+	// It follows its user's grants as they change.
+	if err := h.store.SetGrants(context.Background(), u.ID, []store.Grant{{Path: "omar", Permission: "write"}}); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, rd.do("GET", "/api/files/download?path=lib/book.txt", nil), 404)
+
+	// A cookie beside a token is not looked at; a bad token is refused.
+	both := h.session(u, time.Minute)
+	both.headers["Authorization"] = "Bearer " + upload
+	expect(t, both.do("GET", "/api/me", nil), 403)
+	expect(t, api("fbt_"+strings.Repeat("A", 43)).do("GET", "/api/files?path=omar", nil), 401)
+
+	// Revoked, it is gone.
+	list := decode[[]map[string]any](t, c.do("GET", "/api/me/tokens", nil))
+	if len(list) != 2 || list[0]["hint"] == "" || list[0]["token_hash"] != nil {
+		t.Fatalf("tokens = %v", list)
+	}
+	for _, tk := range list {
+		expect(t, c.do("DELETE", "/api/me/tokens/"+itoa(int64(tk["id"].(float64))), nil), 200)
+	}
+	expect(t, rd.do("GET", "/api/files?path=omar", nil), 401)
+	rec, _ = up.tusUpload("/api/uploads/", "omar/in", "late.txt", "x")
+	expect(t, rec, 401)
+}
+
+func TestAccessNarrow(t *testing.T) {
+	owner := &files.Access{Grants: []store.Grant{{Path: "a", Permission: "write"}, {Path: "b/c", Permission: "read"}}}
+	for _, tc := range []struct {
+		paths []string
+		write bool
+		p     string
+		want  files.Perm
+	}{
+		{[]string{""}, true, "a/x", files.PermWrite},
+		{[]string{""}, true, "b/c/x", files.PermRead}, // never more than the owner
+		{[]string{""}, false, "a/x", files.PermRead},
+		{[]string{"a/sub"}, true, "a/sub/x", files.PermWrite},
+		{[]string{"a/sub"}, true, "a/other", files.PermNone},
+		{[]string{"b"}, true, "b/c/x", files.PermRead},
+		{[]string{"b"}, true, "b/d", files.PermNone},
+		{[]string{"z"}, true, "z", files.PermNone},
+	} {
+		if got := owner.Narrow(tc.paths, tc.write).Perm(tc.p); got != tc.want {
+			t.Errorf("Narrow(%v, %v).Perm(%q) = %v, want %v", tc.paths, tc.write, tc.p, got, tc.want)
+		}
+	}
+	admin := &files.Access{Admin: true}
+	if n := admin.Narrow([]string{"x"}, true); n.Admin || n.Perm("x/y") != files.PermWrite || n.Perm("y") != files.PermNone {
+		t.Errorf("admin narrowed = %+v", n)
+	}
+}
+
+// Files can be uploaded in one request, by PUT or as a multipart form.
+func TestOneRequestUploads(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("pia", "user", store.Grant{Path: "pia", Permission: "write"}, store.Grant{Path: "ro", Permission: "read"})
+	os.MkdirAll(filepath.Join(h.root, "pia"), 0o755)
+	os.MkdirAll(filepath.Join(h.root, "ro"), 0o755)
+	c := h.session(u, time.Minute)
+	token := func(caps ...string) *client {
+		rec := c.do("POST", "/api/me/tokens", map[string]any{"name": "t", "paths": []string{"pia"}, "caps": caps})
+		expect(t, rec, 200)
+		a := h.app()
+		a.origin = ""
+		a.headers["Authorization"] = "Bearer " + decode[map[string]any](t, rec)["token"].(string)
+		return a
+	}
+	up := token("upload")
+
+	rec := up.do("PUT", "/api/v1/files/pia/new/dir/report.txt", []byte("report"))
+	expect(t, rec, 201)
+	if got := decode[map[string]any](t, rec); got["path"] != "pia/new/dir/report.txt" || got["size"] != float64(6) {
+		t.Fatalf("PUT answered %v", got)
+	}
+	// Never overwritten: the second gets the next free name.
+	rec = up.do("PUT", "/api/v1/files/pia/new/dir/report.txt", []byte("again"))
+	if got := decode[map[string]any](t, rec); got["name"] != "report (1).txt" {
+		t.Fatalf("second PUT answered %v", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(h.root, "pia/new/dir/report.txt")); string(got) != "report" {
+		t.Fatalf("first file is now %q", got)
+	}
+	for _, p := range []string{"ro/x.txt", "elsewhere/x.txt", "pia/..%2f..%2fx.txt", "pia/a:b.txt", "pia/.filebrowser/x", ""} {
+		if rec := up.do("PUT", "/api/v1/files/"+p, []byte("x")); rec.Code < 400 {
+			t.Errorf("PUT %q: %d", p, rec.Code)
+		}
+	}
+	// Nothing is left in staging.
+	left, _ := filepath.Glob(filepath.Join(h.root, ".filebrowser", "uploads", "put-*"))
+	if len(left) != 0 {
+		t.Errorf("staged files left: %v", left)
+	}
+
+	// The quota holds.
+	q := int64(40)
+	if err := h.store.UpdateUser(context.Background(), u.ID, store.UserUpdate{QuotaBytes: &q}); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, up.do("PUT", "/api/v1/files/pia/big.bin", []byte(strings.Repeat("x", 60))), http.StatusRequestEntityTooLarge)
+	q = 0
+	h.store.UpdateUser(context.Background(), u.ID, store.UserUpdate{QuotaBytes: &q})
+
+	// A multipart form, as ShareX and HTML forms send.
+	form := func(a *client, target string, fields ...string) *httptest.ResponseRecorder {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		for i := 0; i < len(fields); i += 2 {
+			if name, ok := strings.CutPrefix(fields[i], "file:"); ok {
+				fw, _ := mw.CreateFormFile("file", name)
+				fw.Write([]byte(fields[i+1]))
+			} else {
+				mw.WriteField(fields[i], fields[i+1])
+			}
+		}
+		mw.Close()
+		a.headers["Content-Type"] = mw.FormDataContentType()
+		defer delete(a.headers, "Content-Type")
+		return a.do("POST", target, body.Bytes())
+	}
+	rec = form(up, "/api/v1/upload?dir=pia/shots", "file:one.png", "1", "file:two.png", "22")
+	expect(t, rec, 201)
+	if got := decode[map[string][]map[string]any](t, rec)["files"]; len(got) != 2 || got[1]["path"] != "pia/shots/two.png" {
+		t.Fatalf("form answered %v", got)
+	}
+	expect(t, form(up, "/api/v1/upload", "dir", "pia/field", "file:f.txt", "f"), 201)
+	if _, err := os.Stat(filepath.Join(h.root, "pia/field/f.txt")); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, form(up, "/api/v1/upload?dir=ro", "file:x.txt", "x"), 404) // outside the token
+	expect(t, form(up, "/api/v1/upload?dir=pia", "note", "no file"), 400)
+	// A link to the upload needs the right to share.
+	expect(t, form(up, "/api/v1/upload?dir=pia&share=1", "file:s.png", "s"), 403)
+	rec = form(token("upload", "share"), "/api/v1/upload?dir=pia&share=1", "file:s.png", "shot")
+	expect(t, rec, 201)
+	link, _ := decode[map[string]any](t, rec)["url"].(string)
+	if rec := h.share().do("GET", strings.TrimPrefix(link, shareOrigin)+"/file", nil); rec.Code != 200 || rec.Body.String() != "shot" {
+		t.Fatalf("shared upload: %d %q (%s)", rec.Code, rec.Body.String(), link)
 	}
 }

@@ -105,7 +105,7 @@ func (c *client) do(method, target string, body any) *httptest.ResponseRecorder 
 	if c.ip != "" {
 		req.RemoteAddr = c.ip + ":1234"
 	}
-	if method != http.MethodGet && method != http.MethodHead {
+	if method != http.MethodGet && method != http.MethodHead && c.origin != "" {
 		req.Header.Set("Origin", c.origin)
 	}
 	if _, ok := body.([]byte); !ok && body != nil {

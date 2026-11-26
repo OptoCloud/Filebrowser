@@ -103,6 +103,13 @@ func (s *Server) csrf(origin string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// An API token is not sent by a browser on a page's behalf the way
+		// a cookie is, so there is no request to forge; guard then acts on
+		// the token alone.
+		if _, ok := bearer(r); ok {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if o := r.Header.Get("Origin"); o != "" {
 			if o != origin {
 				httpx.Error(w, http.StatusForbidden, "cross-origin request rejected")

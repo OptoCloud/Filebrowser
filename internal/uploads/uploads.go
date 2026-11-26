@@ -8,6 +8,7 @@ package uploads
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -313,29 +314,95 @@ func (u *Uploads) place(ev tushandler.HookEvent, a *files.Access, within string)
 	if err != nil || (within != "" && !files.Within(dir, within)) {
 		return "", reject(http.StatusForbidden, "forbidden")
 	}
-	fsys := u.files.FS
-	if err := fsys.MkdirAll(dir); err != nil {
-		return "", reject(http.StatusConflict, "cannot create directory")
-	}
-	// Another upload (or a new file) can take the free name between
-	// UniquePath and Move; Move never overwrites, so try the next name.
-	var final string
-	for range 5 {
-		if final, err = fsys.UniquePath(files.Join(dir, name)); err != nil {
-			break
-		}
-		if err = fsys.Move(binPath(ev.Upload), final); !errors.Is(err, files.ErrExists) {
-			break
-		}
-	}
+	final, err := u.moveIn(binPath(ev.Upload), dir, name)
 	if err != nil {
 		// tusd sends the error text to the client, and file errors name the
 		// real path, which a drop-link uploader must not learn.
 		slog.Error("place upload", "upload", ev.Upload.ID, "err", err)
 		return "", reject(http.StatusConflict, "cannot store the file under this name")
 	}
-	_ = fsys.Root().Remove(infoPath(ev.Upload.ID))
+	_ = u.files.FS.Root().Remove(infoPath(ev.Upload.ID))
 	return final, nil
+}
+
+// moveIn moves the staged file into dir (made if need be) as name, or as the
+// next free variant of it: nothing is ever overwritten.
+func (u *Uploads) moveIn(staged, dir, name string) (string, error) {
+	fsys := u.files.FS
+	if err := fsys.MkdirAll(dir); err != nil {
+		return "", err
+	}
+	// Another upload (or a new file) can take the free name between
+	// UniquePath and Move; Move never overwrites, so try the next name.
+	var final string
+	var err error
+	for range 5 {
+		if final, err = fsys.UniquePath(files.Join(dir, name)); err != nil {
+			break
+		}
+		if err = fsys.Move(staged, final); !errors.Is(err, files.ErrExists) {
+			break
+		}
+	}
+	return final, err
+}
+
+// ErrTooLarge and ErrQuota are why Put refused a file.
+var (
+	ErrTooLarge = errors.New("file too large")
+	ErrQuota    = errors.New("quota exceeded")
+)
+
+// Put stores body as dir/name for id in one request, for the clients that
+// cannot speak tus (curl, ShareX, a camera). Like a tus upload it is staged
+// on the destination's filesystem, counted against the quota and never
+// overwrites; unlike one it cannot be resumed, and a request body is as
+// large as the proxy in front allows (100 MB behind Cloudflare).
+func (u *Uploads) Put(ctx context.Context, id *httpx.Identity, dir, name string, body io.Reader) (string, int64, error) {
+	if err := files.ValidName(name); err != nil {
+		return "", 0, err
+	}
+	// (A folder that does not exist yet resolves as far as it does, and is made.)
+	dir, err := u.files.FS.Authorize(id.Access, dir, files.PermWrite)
+	if err != nil {
+		return "", 0, err
+	}
+	stage, _ := u.files.FS.ReservedDir(dir, "uploads")
+	staged := stage + "/put-" + auth.NewToken(16)
+	root := u.files.FS.Root()
+	f, err := root.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	if err != nil {
+		return "", 0, err
+	}
+	placed := false
+	defer func() {
+		if !placed {
+			_ = root.Remove(staged)
+		}
+	}()
+	n, err := io.Copy(f, io.LimitReader(body, u.maxSize+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	if n > u.maxSize {
+		return "", 0, ErrTooLarge
+	}
+	// The size is only known now; the reservation covers the move.
+	if !u.files.Reserve(ctx, staged, id.User.ID, id.Access, n, id.User.QuotaBytes) {
+		return "", 0, ErrQuota
+	}
+	defer u.files.Release(staged)
+	final, err := u.moveIn(staged, dir, name)
+	if err != nil {
+		return "", 0, err
+	}
+	placed = true
+	u.files.AddUsage(id.User.ID, n)
+	u.audit.Log(ctx, audit.FileUpload, final, map[string]any{"size": n})
+	return final, n, nil
 }
 
 // fact reads a server-side upload fact. Uploads started before these moved
@@ -492,6 +559,12 @@ func (u *Uploads) Cleanup(maxAge time.Duration) {
 	dropCutoff := time.Now().Add(-min(maxAge, dropStale))
 	for _, e := range entries {
 		name := e.Name()
+		if strings.HasPrefix(name, "put-") { // a one-request upload that never finished
+			if stale(files.UploadsDir + "/" + name) {
+				_ = root.Remove(files.UploadsDir + "/" + name)
+			}
+			continue
+		}
 		if strings.HasSuffix(name, ".lock") { // left by the file locker used before
 			_ = root.Remove(files.UploadsDir + "/" + name)
 			continue

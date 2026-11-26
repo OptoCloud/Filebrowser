@@ -6,6 +6,7 @@
   import { formatDate, formatSize } from '#lib/format.js';
   import type { Session } from '#lib/types.js';
   import Modal from '#lib/components/Modal.svelte';
+  import TokensCard from '#lib/components/TokensCard.svelte';
 
   let { data } = $props();
 
@@ -258,6 +259,8 @@
         </div>
       </div>
     {/if}
+
+    {#if !me.restricted}<TokensCard />{/if}
 
     <div class="card">
       <div class="row">

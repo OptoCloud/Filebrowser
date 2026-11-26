@@ -59,6 +59,7 @@ type Server struct {
 	shareBackoff *auth.Backoff
 	shareLimiter *auth.RateLimiter
 	dropLimiter  *auth.RateLimiter
+	tokenLimiter *auth.RateLimiter
 	inviteLimit  *auth.RateLimiter
 	passkeyLimit *auth.RateLimiter
 	// ceremonyLimit caps the security-key ceremonies one user can start: they
@@ -98,6 +99,9 @@ type routeSpec struct {
 	level           Level
 	allowRestricted bool
 	noBodyLimit     bool
+	// tokenCap is the capability an API token needs to use the route; with
+	// none, the route does not take API tokens at all.
+	tokenCap string
 }
 
 func public() routeOpt      { return func(r *routeSpec) { r.level = Public } }
@@ -136,6 +140,7 @@ func New(d Deps) (*Server, error) {
 		// Uploads started through drop links, per IP: a folder of small
 		// files is many in a short time.
 		dropLimiter:   auth.NewRateLimiter(600, 1200),
+		tokenLimiter:  auth.NewRateLimiter(30, 60),
 		inviteLimit:   auth.NewRateLimiter(10, 20),
 		passkeyLimit:  auth.NewRateLimiter(30, 30),
 		ceremonyLimit: auth.NewRateLimiter(20, 20),
@@ -189,6 +194,14 @@ func (s *Server) guard(spec routeSpec, h http.Handler) http.Handler {
 		}
 		if spec.level == Public {
 			h.ServeHTTP(w, r)
+			return
+		}
+		// A request that carries an API token is that token's and nothing
+		// else: a session cookie beside it is not looked at.
+		if raw, ok := bearer(r); ok {
+			if id, ok := s.authenticateToken(w, r, raw, spec); ok {
+				h.ServeHTTP(w, r.WithContext(httpx.WithIdentity(r.Context(), id)))
+			}
 			return
 		}
 		id, ok := s.authenticate(w, r)
@@ -295,6 +308,9 @@ func (s *Server) cleanup(ctx context.Context) {
 	// Keep expired/revoked shares for 30 days for the owner's reference.
 	if _, err := s.store.DeleteSharesExpiredBefore(ctx, now.AddDate(0, 0, -30)); err != nil {
 		slog.Error("share cleanup", "err", err)
+	}
+	if err := s.store.DeleteAPITokensBefore(ctx, now.AddDate(0, 0, -30)); err != nil {
+		slog.Error("token cleanup", "err", err)
 	}
 	if err := s.store.DeleteFileTypesBefore(ctx, now.AddDate(0, 0, -90)); err != nil {
 		slog.Error("file type cleanup", "err", err)

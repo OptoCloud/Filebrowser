@@ -28,9 +28,13 @@ const (
 )
 
 // Identity is the authenticated caller.
+// Identity is who a request acts as: a user's session, or an API token of
+// the user's, in which case Session is nil and Access is the token's part
+// of the user's access.
 type Identity struct {
 	User    *store.User
 	Session *store.Session
+	Token   *store.APIToken
 	Access  *files.Access
 }
 

@@ -40,25 +40,32 @@ func (s *Server) routes() {
 	s.handle("POST /api/me/oidc/link", s.handleOIDCLink)
 	s.handle("POST /api/me/oidc/unlink", s.handleOIDCUnlink)
 	s.handle("DELETE /api/me/webauthn/{id}", s.handleWebAuthnDelete)
+	s.handle("GET /api/me/tokens", s.handleListTokens)
+	s.handle("POST /api/me/tokens", s.handleCreateToken)
+	s.handle("DELETE /api/me/tokens/{id}", s.handleRevokeToken)
 
 	// Files.
-	s.handle("GET /api/files", s.handleList)
-	s.handle("GET /api/files/download", s.handleDownload)
-	s.handle("GET /api/files/zip", s.handleZip)
-	s.handle("POST /api/files/zip", s.handleZip)
-	s.handle("POST /api/files/mkdir", s.handleMkdir)
-	s.handle("POST /api/files/rename", s.handleRename)
-	s.handle("POST /api/files/move", s.handleMove)
-	s.handle("POST /api/files/delete", s.handleDelete)
+	s.handle("GET /api/files", s.handleList, token(capRead))
+	s.handle("GET /api/files/download", s.handleDownload, token(capRead))
+	s.handle("GET /api/files/zip", s.handleZip, token(capRead))
+	s.handle("POST /api/files/zip", s.handleZip, token(capRead))
+	s.handle("POST /api/files/mkdir", s.handleMkdir, token(capUpload))
+	s.handle("POST /api/files/rename", s.handleRename, token(capModify))
+	s.handle("POST /api/files/move", s.handleMove, token(capModify))
+	s.handle("POST /api/files/delete", s.handleDelete, token(capModify))
 	s.handle("POST /api/files/preview-url", s.handlePreviewURL)
-	s.handle("GET /api/files/info", s.handleFileInfo)
-	s.handle("GET /api/files/archive", s.handleArchiveIndex)
-	s.handle("GET /api/search", s.handleSearch)
-	s.handle("GET /api/thumb", s.handleThumb)
+	s.handle("GET /api/files/info", s.handleFileInfo, token(capRead))
+	s.handle("GET /api/files/archive", s.handleArchiveIndex, token(capRead))
+	s.handle("GET /api/search", s.handleSearch, token(capRead))
+	s.handle("GET /api/thumb", s.handleThumb, token(capRead))
 	s.handle("GET /api/trash", s.handleTrashList)
 	s.handle("POST /api/trash/restore", s.handleTrashRestore)
 	s.handle("POST /api/trash/purge", s.handleTrashPurge)
-	s.handle(uploads.AppPrefix, s.uploads.App.ServeHTTP, noBodyLimit())
+	s.handle(uploads.AppPrefix, s.uploads.App.ServeHTTP, noBodyLimit(), token(capUpload))
+
+	// One-request uploads (see api_v1.go).
+	s.handle("PUT /api/v1/files/{path...}", s.handlePutFile, noBodyLimit(), token(capUpload))
+	s.handle("POST /api/v1/upload", s.handlePostUpload, noBodyLimit(), token(capUpload))
 
 	// Media.
 	s.handle("GET /api/media/info", s.handleMediaInfo)
@@ -72,9 +79,9 @@ func (s *Server) routes() {
 	s.handle("POST /api/media/external-url", s.handleExternalURL)
 
 	// Shares (management).
-	s.handle("GET /api/shares", s.handleListShares)
-	s.handle("POST /api/shares", s.handleCreateShare)
-	s.handle("DELETE /api/shares/{id}", s.handleRevokeShare)
+	s.handle("GET /api/shares", s.handleListShares, token(capShare))
+	s.handle("POST /api/shares", s.handleCreateShare, token(capShare))
+	s.handle("DELETE /api/shares/{id}", s.handleRevokeShare, token(capShare))
 
 	// Admin.
 	s.handle("GET /api/admin/users", s.handleAdminUsers, adminOnly())
@@ -89,6 +96,8 @@ func (s *Server) routes() {
 	s.handle("POST /api/admin/invites", s.handleAdminCreateInvite, adminOnly())
 	s.handle("DELETE /api/admin/invites/{id}", s.handleAdminDeleteInvite, adminOnly())
 	s.handle("GET /api/admin/audit", s.handleAdminAudit, adminOnly())
+	s.handle("GET /api/admin/tokens", s.handleAdminTokens, adminOnly())
+	s.handle("DELETE /api/admin/tokens/{id}", s.handleAdminRevokeToken, adminOnly())
 
 	// Unknown API paths: authenticate first so nothing is revealed, then 404.
 	s.handle("/api/", func(w http.ResponseWriter, r *http.Request) {

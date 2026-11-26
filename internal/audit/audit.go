@@ -33,6 +33,8 @@ const (
 	ShareAccess      = "share.access"
 	ShareUnlockFail  = "share.unlock_failed"
 	ShareUpload      = "share.upload"
+	TokenCreated     = "token.created"
+	TokenRevoked     = "token.revoked"
 	FileDelete       = "file.delete"
 	FileRestore      = "file.restore"
 	FilePurge        = "file.purge"
@@ -57,6 +59,15 @@ func (l *Logger) Log(ctx context.Context, action, target string, details any) {
 	var uid *int64
 	if id := httpx.IdentityFrom(ctx); id != nil {
 		uid = &id.User.ID
+		// What a token did is told apart from what its user did.
+		if id.Token != nil {
+			switch d := details.(type) {
+			case nil:
+				details = map[string]any{"token_id": id.Token.ID}
+			case map[string]any:
+				d["token_id"] = id.Token.ID
+			}
+		}
 	}
 	l.LogUser(ctx, uid, action, target, details)
 }

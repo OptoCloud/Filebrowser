@@ -25,7 +25,9 @@ Licensed under the [GNU AGPL v3](LICENSE).
 - Thumbnails, image/audio/video/PDF/text previews, media pipeline (direct play,
   live HLS for video the browser cannot play as is (repackaged, audio converted
   to AAC if needed), WebVTT subtitles, "Open in VLC" signed URLs).
-- Admin page: users, grants, quotas, sessions, invites, audit log.
+- API tokens scoped to folders and capabilities, and one-request uploads for
+  curl, ShareX and the like.
+- Admin page: users, grants, quotas, sessions, invites, tokens, audit log.
 
 ## Access model
 
@@ -36,6 +38,29 @@ shared library (`media:read`) are both just grants.
 
 TOTP is mandatory for admins and for anyone with a write grant (they can upload
 and create shares). Such users get a restricted session until they enroll.
+
+## API tokens
+
+For scripts and other software, a user makes API tokens under Settings. A token
+works in the folders chosen for it and for what it was allowed (`read`,
+`upload`, `modify`, `share`), optionally only from given addresses and until an
+expiry. It is never more than its user's own access, follows that access as it
+changes, and cannot sign in, reach the admin pages or change the account. It is
+sent as `Authorization: Bearer fbt_...` to the same `/api` the web UI uses
+(listing, download, zip, search, resumable tus uploads, rename, move, delete,
+shares), and to two endpoints for clients that cannot speak tus:
+
+```sh
+# One file per request. An existing file is never overwritten: the answer names what was stored.
+curl -T report.pdf -H "Authorization: Bearer $TOKEN" https://files.example.com/api/v1/files/inbox/report.pdf
+
+# A multipart form (ShareX, iOS Shortcuts, HTML forms). With share=1 the answer
+# has a "url" to the upload, for a token that may share.
+curl -F file=@shot.png -H "Authorization: Bearer $TOKEN" "https://files.example.com/api/v1/upload?dir=shots&share=1"
+```
+
+A request body is as large as the proxy in front allows (100 MB behind
+Cloudflare); larger files go through tus (`/api/uploads/`).
 
 ## Development
 

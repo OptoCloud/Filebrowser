@@ -73,6 +73,45 @@ func (a *Access) IsGrantRoot(p string) bool {
 	return false
 }
 
+// Narrow returns the part of a that lies within paths (” being all of it),
+// read-only unless write is set: the access of an API token, which is never
+// more than its owner's and follows the owner's grants as they change.
+func (a *Access) Narrow(paths []string, write bool) *Access {
+	perm := func(owner string) string {
+		if write && owner == "write" {
+			return "write"
+		}
+		return "read"
+	}
+	out := &Access{}
+	add := func(p, permission string) {
+		for i, g := range out.Grants {
+			if g.Path == p {
+				if permission == "write" {
+					out.Grants[i].Permission = "write"
+				}
+				return
+			}
+		}
+		out.Grants = append(out.Grants, store.Grant{Path: p, Permission: permission})
+	}
+	for _, p := range paths {
+		if a.Admin {
+			add(p, perm("write"))
+			continue
+		}
+		for _, g := range a.Grants {
+			switch {
+			case Within(p, g.Path): // the token's path is inside the grant
+				add(p, perm(g.Permission))
+			case Within(g.Path, p): // the grant is inside the token's path
+				add(g.Path, perm(g.Permission))
+			}
+		}
+	}
+	return out
+}
+
 // CanWrite reports whether the user holds any write grant (and therefore
 // must use TOTP).
 func (a *Access) CanWrite() bool {

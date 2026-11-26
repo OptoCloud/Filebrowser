@@ -138,6 +138,25 @@ export interface Share {
   ask_name: boolean;
 }
 
+export interface ApiToken {
+  id: number;
+  user_id: number;
+  name: string;
+  /** The first characters of the token, to tell tokens apart. */
+  hint: string;
+  /** '' is everything its user can access. */
+  paths: string[];
+  caps: string[];
+  allowed_ips: string[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  last_used_ip: string;
+  revoked_at: string | null;
+  active: boolean;
+  owner?: string;
+}
+
 export interface Session {
   id: string;
   user_id: number;

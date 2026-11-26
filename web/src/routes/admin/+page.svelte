@@ -9,8 +9,9 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import CopyField from '#lib/components/CopyField.svelte';
   import Modal from '#lib/components/Modal.svelte';
+  import TokensCard from '#lib/components/TokensCard.svelte';
 
-  type Tab = 'users' | 'sessions' | 'invites' | 'audit';
+  type Tab = 'users' | 'sessions' | 'invites' | 'tokens' | 'audit';
   let tab = $state<Tab>('users');
   let err = $state('');
   let notice = $state('');
@@ -221,7 +222,7 @@
       if (t === 'users') void loadUsers();
       else if (t === 'sessions') void loadSessions();
       else if (t === 'invites') void loadInvites();
-      else void loadAudit();
+      else if (t === 'audit') void loadAudit();
     });
   });
 
@@ -270,7 +271,7 @@
 <div class="page">
   <h1>Administration</h1>
   <div class="tabs">
-    {#each ['users', 'sessions', 'invites', 'audit'] as t (t)}
+    {#each ['users', 'sessions', 'invites', 'tokens', 'audit'] as t (t)}
       <button class:active={tab === t} onclick={() => (tab = t as Tab)}>
         {t[0].toUpperCase() + t.slice(1)}
       </button>
@@ -433,6 +434,8 @@
         </tbody>
       </table>
     </div>
+  {:else if tab === 'tokens'}
+    <TokensCard admin />
   {:else}
     <form class="row bar" onsubmit={(e) => (e.preventDefault(), loadAudit())}>
       <input

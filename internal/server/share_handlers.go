@@ -35,7 +35,7 @@ func viewShare(sh *store.Share) shareView {
 func (s *Server) handleListShares(w http.ResponseWriter, r *http.Request) {
 	id := httpx.IdentityFrom(r.Context())
 	owner := id.User.ID
-	all := r.URL.Query().Get("all") == "1" && id.User.IsAdmin()
+	all := r.URL.Query().Get("all") == "1" && id.User.IsAdmin() && id.Token == nil
 	if all {
 		owner = 0
 	}
@@ -57,6 +57,11 @@ func (s *Server) handleListShares(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]shareView, 0, len(list))
 	for _, sh := range list {
+		// An API token sees the shares of what it may write to, not all of
+		// its user's.
+		if id.Token != nil && id.Access.Perm(sh.Path) < files.PermWrite {
+			continue
+		}
 		v := viewShare(sh)
 		v.Owner = names[sh.OwnerID]
 		out = append(out, v)
@@ -94,7 +99,8 @@ func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sh, err := s.store.ShareByID(ctx, sid)
-	if err != nil || (sh.OwnerID != id.User.ID && !id.User.IsAdmin()) {
+	if err != nil || (sh.OwnerID != id.User.ID && !id.User.IsAdmin()) ||
+		(id.Token != nil && (sh.OwnerID != id.User.ID || id.Access.Perm(sh.Path) < files.PermWrite)) {
 		httpx.Error(w, http.StatusNotFound, "not found")
 		return
 	}
