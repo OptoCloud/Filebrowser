@@ -38,13 +38,19 @@ type harness struct {
 	root  string
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessWith(t, nil) }
+
+// newHarnessWith is newHarness with the configuration changed by adjust.
+func newHarnessWith(t *testing.T, adjust func(*config.Config)) *harness {
 	t.Helper()
 	st := storetest.New(t)
 	root := t.TempDir()
 	cfg := config.Default()
 	cfg.AppOrigin, cfg.ShareOrigin, cfg.Dev = appOrigin, shareOrigin, true
 	cfg.FilesRoot, cfg.DataDir, cfg.CacheDir = root, t.TempDir(), t.TempDir()
+	if adjust != nil {
+		adjust(&cfg)
+	}
 	keys, err := auth.NewKeys(bytes.Repeat([]byte{7}, 32))
 	if err != nil {
 		t.Fatal(err)

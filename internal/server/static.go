@@ -8,6 +8,7 @@ import (
 	"html"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -75,8 +76,15 @@ func newStatic(fsys fs.FS, cfg config.Config) (*static, error) {
 		hashes = append(hashes, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
 	}
 	scriptSrc := strings.TrimSpace("'self' " + strings.Join(hashes, " "))
+	// With an upload bucket, the pages send large files straight to it.
+	connect := "'self'"
+	if cfg.R2.Enabled() {
+		if u, err := url.Parse(cfg.R2.Endpoint); err == nil && u.Host != "" {
+			connect += " " + u.Scheme + "://" + u.Host
+		}
+	}
 	common := "default-src 'self'; script-src " + scriptSrc + "; style-src 'self' 'unsafe-inline'; " +
-		"img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; " +
+		"img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src " + connect + "; worker-src 'self'; " +
 		"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 	head, rest, ok := bytes.Cut(index, []byte("</head>"))
 	if !ok {

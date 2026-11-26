@@ -71,6 +71,12 @@ func (s *Server) routes() {
 	s.handle("PUT /api/v1/files/{path...}", s.handlePutFile, noBodyLimit(), token(capUpload))
 	s.handle("POST /api/v1/upload", s.handlePostUpload, noBodyLimit(), token(capUpload))
 
+	// Large uploads through the bucket, when there is one (see uploads/r2.go).
+	if s.r2 != nil {
+		s.handle("/api/r2/", s.r2.App.ServeHTTP, token(capUpload))
+		s.shareMux.Handle("/_r2/", s.r2.Share)
+	}
+
 	// Media.
 	s.handle("GET /api/media/info", s.handleMediaInfo)
 	s.handle("POST /api/media/prepare", s.handleMediaPrepare)

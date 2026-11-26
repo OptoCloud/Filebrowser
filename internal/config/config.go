@@ -64,6 +64,7 @@ type Config struct {
 	Shares  Shares  `toml:"shares"`
 	Uploads Uploads `toml:"uploads"`
 	Media   Media   `toml:"media"`
+	R2      R2      `toml:"r2"`
 	OIDC    []OIDC  `toml:"oidc"`
 }
 
@@ -111,6 +112,38 @@ type Media struct {
 	ExternalURLTTL Duration `toml:"external_url_ttl"`
 }
 
+// R2 configures a Cloudflare R2 (or other S3-compatible) bucket as a buffer
+// for large uploads: the browser sends the file to the bucket, and the
+// server pulls it from there and deletes it. With a tunnel in front, large
+// uploads then do not pass through it. Unset (no endpoint), all uploads come
+// to the server directly.
+type R2 struct {
+	// Endpoint is the S3 API address, e.g. https://<account id>.r2.cloudflarestorage.com.
+	Endpoint string `toml:"endpoint"`
+	Bucket   string `toml:"bucket"`
+	// AccessKeyID and SecretAccessKey belong to an API token limited to
+	// object read and write on that one bucket. FB_R2_SECRET_ACCESS_KEY
+	// overrides the secret.
+	AccessKeyID     string `toml:"access_key_id"`
+	SecretAccessKey string `toml:"secret_access_key"`
+	// Region is "auto" for R2.
+	Region string `toml:"region"`
+	// Threshold is the file size from which an upload goes through the bucket.
+	Threshold int64 `toml:"threshold"`
+	// PartSize is the size of the parts a file is sent in (5 MiB to 5 GiB).
+	PartSize int64 `toml:"part_size"`
+	// MaxPendingBytes bounds what uploads in progress may together hold in
+	// the bucket, and so what the bucket can cost.
+	MaxPendingBytes int64 `toml:"max_pending_bytes"`
+	// VerifyMD5 checks each part pulled from the bucket against the MD5 the
+	// bucket reported for it. Turn it off for a store whose part ETags are
+	// not MD5 sums.
+	VerifyMD5 bool `toml:"verify_md5"`
+}
+
+// Enabled reports whether a bucket is configured.
+func (r R2) Enabled() bool { return r.Endpoint != "" }
+
 type OIDC struct {
 	ID           string   `toml:"id"`
 	Name         string   `toml:"name"`
@@ -152,6 +185,7 @@ func Default() Config {
 		Shares: Shares{DefaultExpiry: Duration{7 * 24 * time.Hour}, MaxExpiry: Duration{90 * 24 * time.Hour},
 			DropMaxBytes: 50 << 30, DropMaxFiles: 2000},
 		Uploads: Uploads{MaxSize: 100 << 30},
+		R2:      R2{Region: "auto", Threshold: 1 << 30, PartSize: 64 << 20, MaxPendingBytes: 200 << 30, VerifyMD5: true},
 		Media: Media{
 			FFmpeg:         "ffmpeg",
 			FFprobe:        "ffprobe",
@@ -187,6 +221,7 @@ func Load(path string) (Config, error) {
 	// Environment overrides, convenient for containers.
 	for name, p := range map[string]*string{
 		"FB_DATABASE_URL": &cfg.DatabaseURL, "FB_APP_ORIGIN": &cfg.AppOrigin, "FB_SHARE_ORIGIN": &cfg.ShareOrigin,
+		"FB_R2_SECRET_ACCESS_KEY": &cfg.R2.SecretAccessKey,
 	} {
 		if v := os.Getenv(name); v != "" {
 			*p = v
@@ -233,6 +268,17 @@ func (c Config) Validate() error {
 	}
 	if !themeColor.MatchString(c.ThemeColor) {
 		errs = append(errs, errors.New(`theme_color must be a colour like "#2563eb"`))
+	}
+	if c.R2.Enabled() {
+		if u, err := url.Parse(c.R2.Endpoint); err != nil || u.Host == "" || (u.Scheme != "https" && !c.Dev) {
+			errs = append(errs, errors.New("r2.endpoint must be an https URL"))
+		}
+		if c.R2.Bucket == "" || c.R2.AccessKeyID == "" || c.R2.SecretAccessKey == "" {
+			errs = append(errs, errors.New("r2 needs bucket, access_key_id and secret_access_key (or FB_R2_SECRET_ACCESS_KEY)"))
+		}
+		if c.R2.PartSize < 5<<20 || c.R2.PartSize > 5<<30 || c.R2.Threshold < 0 || c.R2.MaxPendingBytes <= 0 {
+			errs = append(errs, errors.New("r2.part_size must be 5 MiB to 5 GiB, threshold not negative and max_pending_bytes positive"))
+		}
 	}
 	if c.FilesRoot == "" {
 		errs = append(errs, errors.New("files_root is required"))

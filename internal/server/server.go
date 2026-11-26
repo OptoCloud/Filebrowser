@@ -20,6 +20,7 @@ import (
 	"filebrowser/internal/files"
 	"filebrowser/internal/httpx"
 	"filebrowser/internal/media"
+	"filebrowser/internal/r2"
 	"filebrowser/internal/shares"
 	"filebrowser/internal/store"
 	"filebrowser/internal/uploads"
@@ -62,6 +63,8 @@ type Server struct {
 	dropLimiter  *auth.RateLimiter
 	tokenLimiter *auth.RateLimiter
 	hooks        *webhooks.Dispatcher
+	// r2 is the upload bucket, or nil when none is configured.
+	r2           *uploads.R2
 	inviteLimit  *auth.RateLimiter
 	passkeyLimit *auth.RateLimiter
 	// ceremonyLimit caps the security-key ceremonies one user can start: they
@@ -160,6 +163,14 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s.uploads = up
+	if cfg.R2.Enabled() {
+		client, err := r2.New(cfg.R2.Endpoint, cfg.R2.Bucket, r2.Credentials{
+			AccessKeyID: cfg.R2.AccessKeyID, SecretAccessKey: cfg.R2.SecretAccessKey, Region: cfg.R2.Region})
+		if err != nil {
+			return nil, err
+		}
+		s.r2 = up.EnableR2(client, cfg.R2)
+	}
 	if s.webauthn, err = auth.NewWebAuthn(cfg.AppOrigin); err != nil {
 		return nil, err
 	}
@@ -275,6 +286,9 @@ func (s *Server) Handler() http.Handler {
 // Janitor runs periodic cleanup until ctx is done.
 func (s *Server) Janitor(ctx context.Context) {
 	s.hooks.Run(ctx)
+	if s.r2 != nil {
+		go s.r2.Run(ctx)
+	}
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {

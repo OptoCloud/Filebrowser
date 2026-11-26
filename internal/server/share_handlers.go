@@ -234,6 +234,9 @@ func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
 		// file is sent; -1 is no limit.
 		lim := s.shares.Limits(sh)
 		info["ask_name"] = sh.AskName
+		if s.r2 != nil {
+			info["r2_threshold"] = s.cfg.R2.Threshold
+		}
 		info["max_file_bytes"], info["allowed_types"] = lim.FileBytes, lim.Types
 		info["bytes_left"], info["files_left"] = int64(-1), -1
 		if lim.Bytes > 0 {

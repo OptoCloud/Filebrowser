@@ -329,6 +329,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"providers":      s.oidc.Providers(),
 		"share_origin":   s.cfg.ShareOrigin,
 	}
+	if s.r2 != nil {
+		// Files from this size go through the upload bucket.
+		resp["r2_threshold"] = s.cfg.R2.Threshold
+	}
 	if id.User.QuotaBytes > 0 {
 		resp["usage_bytes"] = s.files.Usage(r.Context(), id.User.ID, id.Access)
 	}

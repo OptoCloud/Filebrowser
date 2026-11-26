@@ -54,6 +54,9 @@ type Uploads struct {
 
 	App   http.Handler
 	Share http.Handler
+
+	// r2 is set when large uploads go through a bucket (see EnableR2).
+	r2 *R2
 }
 
 // dropStale is how long an upload through a drop link may stand still.
@@ -539,6 +542,9 @@ func (u *Uploads) pending() []string {
 // Cleanup removes incomplete uploads not touched for maxAge, and with them
 // their quota reservations.
 func (u *Uploads) Cleanup(maxAge time.Duration) {
+	if u.r2 != nil {
+		u.r2.Cleanup(context.Background(), maxAge)
+	}
 	root := u.files.FS.Root()
 	d, err := root.Open(files.UploadsDir)
 	if err != nil {
