@@ -71,7 +71,7 @@ func (s *Server) withIP(next http.Handler) http.Handler {
 		if s.cfg.TrustedIPHeader == "" && !s.cfg.Dev {
 			s.warnIfProxied(r)
 		}
-		ip := httpx.ClientIP(r, s.cfg.TrustedIPHeader, s.proxies)
+		ip := httpx.ClientIP(r, s.cfg.TrustedIPHeader, *s.proxies.Load())
 		next.ServeHTTP(w, r.WithContext(httpx.WithIP(r.Context(), ip)))
 	})
 }

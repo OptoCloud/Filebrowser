@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"filebrowser/internal/audit"
@@ -65,8 +66,12 @@ type Server struct {
 	ceremonyLimit *auth.RateLimiter
 	pending       *pendingLogins
 
-	proxies      []netip.Prefix
-	proxyWarning sync.Once
+	// proxies are the trusted proxies: staticProxies from the configuration
+	// and, if it names them, Cloudflare's ranges as of cloudflareAt.
+	proxies       atomic.Pointer[[]netip.Prefix]
+	staticProxies []netip.Prefix
+	cloudflareAt  time.Time
+	proxyWarning  sync.Once
 
 	appMux   *http.ServeMux
 	shareMux *http.ServeMux
@@ -151,8 +156,12 @@ func New(d Deps) (*Server, error) {
 	if s.webauthn, err = auth.NewWebAuthn(cfg.AppOrigin); err != nil {
 		return nil, err
 	}
-	if s.proxies, err = cfg.ProxyPrefixes(); err != nil {
+	if s.staticProxies, err = cfg.ProxyPrefixes(); err != nil {
 		return nil, err
+	}
+	s.setProxies(nil)
+	if cfg.TrustsCloudflare() {
+		s.loadCloudflareRanges()
 	}
 	if s.static, err = newStatic(d.Web, cfg); err != nil {
 		return nil, err
@@ -268,6 +277,7 @@ func (s *Server) Janitor(ctx context.Context) {
 
 func (s *Server) cleanup(ctx context.Context) {
 	now := time.Now()
+	s.refreshCloudflareRanges(ctx)
 	if n, err := s.store.DeleteSessionsBefore(ctx, now.Add(-s.cfg.Session.IdleTimeout.Duration), now); err != nil {
 		slog.Error("session cleanup", "err", err)
 	} else if n > 0 {

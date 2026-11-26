@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ type Config struct {
 	// (e.g. "CF-Connecting-IP" behind Cloudflare Tunnel). Empty uses RemoteAddr.
 	TrustedIPHeader string `toml:"trusted_ip_header"`
 	// TrustedProxies are the peers (CIDRs) whose TrustedIPHeader is believed.
+	// "cloudflare" stands for Cloudflare's published ranges, refreshed daily.
 	TrustedProxies []string `toml:"trusted_proxies"`
 	// Dev relaxes cookie and HSTS settings for http://localhost development.
 	Dev bool `toml:"dev"`
@@ -267,10 +269,17 @@ func defaultSandbox() string {
 	return "none"
 }
 
-// ProxyPrefixes parses TrustedProxies.
+// CloudflareProxies in TrustedProxies stands for the address ranges
+// Cloudflare publishes for its edge, which the server keeps current.
+const CloudflareProxies = "cloudflare"
+
+// ProxyPrefixes parses TrustedProxies (without CloudflareProxies).
 func (c Config) ProxyPrefixes() ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for _, p := range c.TrustedProxies {
+		if p == CloudflareProxies {
+			continue
+		}
 		pre, err := netip.ParsePrefix(p)
 		if err != nil {
 			return nil, fmt.Errorf("trusted_proxies: %w", err)
@@ -278,4 +287,9 @@ func (c Config) ProxyPrefixes() ([]netip.Prefix, error) {
 		out = append(out, pre.Masked())
 	}
 	return out, nil
+}
+
+// TrustsCloudflare reports whether TrustedProxies names CloudflareProxies.
+func (c Config) TrustsCloudflare() bool {
+	return slices.Contains(c.TrustedProxies, CloudflareProxies)
 }

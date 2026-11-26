@@ -111,7 +111,15 @@ runuser -u filebrowser -- env $(cat /etc/filebrowser/env) \
 Install `cloudflared` (in this container or its own) and use `cloudflared.yml`.
 Set `trusted_ip_header = "CF-Connecting-IP"` and keep `listen =
 "127.0.0.1:8080"`, so the app is only reachable through the tunnel and rate
-limits see real client IPs (`trusted_proxies` defaults to localhost).
+limits see real client IPs (`trusted_proxies` defaults to localhost). The Docker
+image ships with both set for a tunnel running beside the container.
+
+If Cloudflare instead connects to the server directly (an open port, no
+tunnel), add `"cloudflare"` to `trusted_proxies`: it stands for the address
+ranges Cloudflare publishes for its edge, fetched once a day from
+`api.cloudflare.com` and kept in `data_dir` (the last good list stays in use
+when a fetch fails). Behind a tunnel it has no effect, since the peer is
+`cloudflared`.
 
 Recommended Cloudflare settings: a WAF rate-limit rule on `/api/auth/login`,
 `/s/*/api/unlock` and `/api/auth/invite*`; a Cache Rule that bypasses caching

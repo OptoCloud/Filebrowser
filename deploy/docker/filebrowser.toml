@@ -7,13 +7,20 @@ share_origin = "https://share.example.com"
 files_root = "/srv/files"
 data_dir = "/var/lib/filebrowser"
 cache_dir = "/var/cache/filebrowser"
-# The reverse proxy / tunnel in front of the container. Set both when one is
-# in front (it almost always is): otherwise every client shares the proxy's
-# address, so a few failed logins from anyone throttle everyone. Use
-# "CF-Connecting-IP" for Cloudflare Tunnel or "X-Forwarded-For" for Caddy,
-# nginx and Traefik. The server logs a warning while this is missing.
-# trusted_proxies = ["172.16.0.0/12"]
-# trusted_ip_header = "CF-Connecting-IP"
+# The reverse proxy or tunnel in front of the container: without these two
+# settings every client shares the proxy's address, so a few failed logins
+# from anyone throttle everyone. trusted_proxies are the peers whose header is
+# believed (Docker's networks, where the proxy or cloudflared runs);
+# trusted_ip_header is "CF-Connecting-IP" for Cloudflare Tunnel, or
+# "X-Forwarded-For" for Caddy, nginx and Traefik. Add "cloudflare" to
+# trusted_proxies only if Cloudflare connects to this server directly (no
+# tunnel): it stands for Cloudflare's published ranges, refreshed daily.
+#
+# The default below is for Cloudflare Tunnel. With any other proxy, change
+# trusted_ip_header to the header that proxy sets: a header the proxy passes
+# through unchanged lets every client state its own address.
+trusted_proxies = ["127.0.0.1/32", "::1/128", "172.16.0.0/12"]
+trusted_ip_header = "CF-Connecting-IP"
 
 [media]
 ffmpeg = "/usr/bin/ffmpeg"
