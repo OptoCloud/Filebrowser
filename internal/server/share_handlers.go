@@ -361,7 +361,7 @@ func (s *Server) handleSignedLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := s.store.SessionByHash(ctx, link.Session)
-	if err != nil || sess.UserID != link.UserID || time.Now().After(sess.ExpiresAt) {
+	if err != nil || sess.UserID != link.UserID || !s.sessions.Live(sess) {
 		httpx.Error(w, http.StatusNotFound, "link expired")
 		return
 	}

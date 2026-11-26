@@ -78,8 +78,7 @@ func (m *Sessions) Lookup(ctx context.Context, r *http.Request) (*store.Session,
 	} else if err != nil {
 		return nil, nil, err
 	}
-	now := m.now()
-	if now.After(sess.ExpiresAt) || now.Sub(sess.LastSeenAt) > m.Idle {
+	if !m.Live(sess) {
 		_ = m.Store.DeleteSession(ctx, hash)
 		return nil, nil, ErrNoSession
 	}
@@ -93,11 +92,20 @@ func (m *Sessions) Lookup(ctx context.Context, r *http.Request) (*store.Session,
 		_ = m.Store.DeleteSession(ctx, hash)
 		return nil, nil, ErrNoSession
 	}
-	if now.Sub(sess.LastSeenAt) > time.Minute {
+	if now := m.now(); now.Sub(sess.LastSeenAt) > time.Minute {
 		_ = m.Store.TouchSession(ctx, hash, now)
 		sess.LastSeenAt = now
 	}
 	return sess, user, nil
+}
+
+// Live reports whether sess is within its absolute and idle timeouts. Rows
+// past them stay in the database until looked up or swept, so whatever
+// stands on a session other than its cookie (a signed link, an account link
+// in progress) asks here.
+func (m *Sessions) Live(sess *store.Session) bool {
+	now := m.now()
+	return !now.After(sess.ExpiresAt) && now.Sub(sess.LastSeenAt) <= m.Idle
 }
 
 // Destroy deletes the session in r and clears the cookie.

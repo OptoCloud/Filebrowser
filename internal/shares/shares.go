@@ -427,21 +427,42 @@ func (s *Service) countedCookieName(id int64) string {
 	return "fbc" + strconv.FormatInt(id, 10)
 }
 
-// Counted reports whether this browser has already used a download of sh.
+// countedWindow is how long a browser that used a download of a limited
+// link may keep using it (seeking in a video, resuming, listing again)
+// without using another. The cookie is not tied to one browser, so the
+// window is what bounds a copy of it handed to someone else.
+const countedWindow = 24 * time.Hour
+
+func countedMsg(sh *store.Share, exp int64) []byte {
+	return []byte(strconv.FormatInt(sh.ID, 10) + "|" + strconv.FormatInt(exp, 10))
+}
+
+// Counted reports whether this browser has used a download of sh recently
+// enough to go on without using another.
 func (s *Service) Counted(r *http.Request, sh *store.Share) bool {
 	c, err := r.Cookie(s.countedCookieName(sh.ID))
 	if err != nil {
 		return false
 	}
-	sig, err := base64.RawURLEncoding.DecodeString(c.Value)
-	return err == nil && s.Keys.Verify("share-counted", []byte(strconv.FormatInt(sh.ID, 10)), sig)
+	expStr, sigStr, ok := strings.Cut(c.Value, ".")
+	if !ok {
+		return false
+	}
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return false
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(sigStr)
+	return err == nil && s.Keys.Verify("share-counted", countedMsg(sh, exp), sig)
 }
 
 // MarkCounted records that this browser has used a download of sh.
 func (s *Service) MarkCounted(w http.ResponseWriter, sh *store.Share) {
-	sig := s.Keys.Sign("share-counted", []byte(strconv.FormatInt(sh.ID, 10)))
+	exp := min(time.Now().Add(countedWindow).Unix(), sh.ExpiresAt.Unix())
+	sig := s.Keys.Sign("share-counted", countedMsg(sh, exp))
 	auth.SetCookie(w, auth.Cookie{
-		Name: s.countedCookieName(sh.ID), Value: base64.RawURLEncoding.EncodeToString(sig),
-		Expires: sh.ExpiresAt, SameSite: http.SameSiteLaxMode,
+		Name:    s.countedCookieName(sh.ID),
+		Value:   strconv.FormatInt(exp, 10) + "." + base64.RawURLEncoding.EncodeToString(sig),
+		Expires: time.Unix(exp, 0), SameSite: http.SameSiteLaxMode,
 	}, s.Secure)
 }

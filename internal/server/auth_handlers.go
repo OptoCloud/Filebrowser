@@ -642,9 +642,8 @@ func (s *Server) linkSessionValid(ctx context.Context, ident *auth.OIDCIdentity)
 		return false
 	}
 	sess, err := s.store.SessionByHash(ctx, ident.LinkSession)
-	now := time.Now()
-	if err != nil || sess.UserID != ident.LinkUserID || now.After(sess.ExpiresAt) ||
-		now.Sub(sess.LastSeenAt) > s.cfg.Session.IdleTimeout.Duration || now.Sub(sess.CreatedAt) > freshLogin+10*time.Minute {
+	if err != nil || sess.UserID != ident.LinkUserID || !s.sessions.Live(sess) ||
+		time.Since(sess.CreatedAt) > freshLogin+10*time.Minute {
 		return false
 	}
 	user, err := s.store.UserByID(ctx, sess.UserID)

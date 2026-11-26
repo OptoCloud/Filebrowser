@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -525,4 +526,50 @@ func TestUploadReservationOutlivesRestart(t *testing.T) {
 	if code := start(80); code != 201 {
 		t.Fatalf("upload after cleanup: %d", code)
 	}
+}
+
+// A signed link stops with its session's idle timeout, not only when the
+// expired row is finally swept.
+func TestSignedLinkHonoursIdleTimeout(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("kim", "admin")
+	write(t, h.root, "doc.pdf", "%PDF-1.4")
+	a := h.session(u, 0)
+	link := decode[map[string]string](t, a.do("POST", "/api/files/preview-url", map[string]string{"path": "doc.pdf"}))["url"]
+	path := strings.TrimPrefix(link, shareOrigin)
+	expect(t, h.share().do("GET", path, nil), 200)
+	hash := h.srv.keys.HashToken(a.cookies["fb_session"].Value)
+	idle := h.srv.cfg.Session.IdleTimeout.Duration
+	if err := h.store.TouchSession(context.Background(), hash, time.Now().Add(-idle-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, h.share().do("GET", path, nil), 404)
+}
+
+// The cookie that lets a browser go on using a download it was counted for
+// runs out, so a copy of it is not a pass for as long as the link lasts.
+func TestShareCountedCookieExpires(t *testing.T) {
+	h := newHarness(t)
+	h.user("lea", "admin")
+	write(t, h.root, "one.txt", "once")
+	a := h.login("lea")
+	created := decode[map[string]any](t, a.do("POST", "/api/shares", map[string]any{"path": "one.txt", "max_downloads": 1}))
+	token := strings.TrimPrefix(created["url"].(string), shareOrigin+"/s/")
+	first := h.share()
+	expect(t, first.do("GET", "/s/"+token+"/file", nil), 200)
+	expect(t, first.do("GET", "/s/"+token+"/file", nil), 200) // the same browser, again
+	expect(t, h.share().do("GET", "/s/"+token+"/file", nil), 410)
+	var counted *http.Cookie
+	for _, c := range first.cookies {
+		counted = c
+	}
+	if counted == nil || time.Until(counted.Expires) > 25*time.Hour {
+		t.Fatalf("counted cookie = %+v", counted)
+	}
+	// A cookie in the old form (no expiry) no longer counts.
+	old := h.share()
+	sh, _ := h.store.Shares(context.Background(), 0)
+	sig := h.srv.keys.Sign("share-counted", []byte(strconv.FormatInt(sh[0].ID, 10)))
+	old.cookies[counted.Name] = &http.Cookie{Name: counted.Name, Value: base64.RawURLEncoding.EncodeToString(sig)}
+	expect(t, old.do("GET", "/s/"+token+"/file", nil), 410)
 }
