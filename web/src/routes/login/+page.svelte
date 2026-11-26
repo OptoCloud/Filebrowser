@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { ApiError, errorMessage, post } from '#lib/api.js';
+  import { siteName } from '#lib/site.js';
   import { LatestRequest } from '#lib/latest.js';
   import { safeNext } from '#lib/nav.js';
   import Icon from '#lib/components/Icon.svelte';
@@ -193,7 +194,7 @@
 
 <div class="wrap">
   <div class="card login">
-    <p class="brand"><Icon name="folder" size={22} /> filebrowser</p>
+    <p class="brand"><Icon name="folder" size={22} /> {siteName}</p>
     <h1>Log in</h1>
     {#if err}<div class="error" role="alert">{err}</div>{/if}
     {#if mfaToken}

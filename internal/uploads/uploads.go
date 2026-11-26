@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tushandler "github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/memorylocker"
@@ -195,7 +196,16 @@ func (u *Uploads) shareCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 	if res == nil || res.Share.Kind != "upload" {
 		return tushandler.HTTPResponse{}, none, reject(http.StatusForbidden, "forbidden")
 	}
-	dir, name, err := target(res.Root, ev.Upload.MetaData)
+	base := res.Root
+	if res.Share.AskName {
+		// Each uploader's files go into a folder of the name they gave.
+		who := strings.TrimSpace(ev.Upload.MetaData["uploader"])
+		if files.ValidName(who) != nil || utf8.RuneCountInString(who) > 64 {
+			return tushandler.HTTPResponse{}, none, reject(http.StatusBadRequest, "enter your name first")
+		}
+		base = files.Join(base, who)
+	}
+	dir, name, err := target(base, ev.Upload.MetaData)
 	if err != nil {
 		return tushandler.HTTPResponse{}, none, err
 	}

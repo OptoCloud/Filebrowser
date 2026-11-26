@@ -36,6 +36,26 @@
   let uploader = $state<Uploader | null>(null);
   let fileInput: HTMLInputElement | undefined = $state();
   let dragging = $state(0);
+  // Drop links that ask for it: the uploader's name, kept for the next visit.
+  let uploaderName = $state(loadName());
+  const nameNeeded = $derived(!!info?.ask_name && !uploaderName.trim());
+
+  function loadName(): string {
+    try {
+      return localStorage.getItem('fb.uploader') ?? '';
+    } catch {
+      return '';
+    }
+  }
+  function setExtra() {
+    if (!uploader || !info?.ask_name) return;
+    uploader.extra = { uploader: uploaderName.trim() };
+    try {
+      localStorage.setItem('fb.uploader', uploaderName.trim());
+    } catch {
+      /* storage unavailable */
+    }
+  }
 
   async function loadInfo() {
     fatal = '';
@@ -118,6 +138,37 @@
 
   const crumbs = $derived(pathCrumbs(sub));
 
+  // The folder as a gallery: the preview steps through the files that have
+  // one, with the arrow keys or a swipe.
+  const viewable = $derived(
+    entries.filter((e) => {
+      const k = kindOf(e);
+      return (
+        !e.is_dir &&
+        ((k === 'image' && isViewableImage(e.mime)) ||
+          k === 'video' ||
+          k === 'audio' ||
+          k === 'pdf')
+      );
+    })
+  );
+  const previewAt = $derived(preview ? viewable.findIndex((e) => e.path === preview?.path) : -1);
+  function step(d: number) {
+    if (previewAt < 0 || viewable.length < 2) return;
+    preview = viewable[(previewAt + d + viewable.length) % viewable.length];
+  }
+  function onkeydown(e: KeyboardEvent) {
+    const t = e.target as HTMLElement | null;
+    if (!preview || (t && ['INPUT', 'VIDEO', 'AUDIO'].includes(t.tagName))) return;
+    if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+  }
+  let touchX = 0;
+  function onTouchEnd(e: TouchEvent) {
+    const dx = (e.changedTouches[0]?.clientX ?? touchX) - touchX;
+    if (Math.abs(dx) > 60) step(dx < 0 ? 1 : -1);
+  }
+
   const typeNames: Record<string, string> = {
     image: 'images',
     video: 'video',
@@ -144,7 +195,8 @@
   function pick() {
     if (!fileInput || !uploader) return;
     const files = filesFromInput(fileInput.files);
-    if (files.length) uploader.add(files, '');
+    setExtra();
+    if (files.length && !nameNeeded) uploader.add(files, '');
     fileInput.value = '';
   }
   async function onDrop(e: DragEvent) {
@@ -152,7 +204,8 @@
     if (!uploader || !e.dataTransfer) return;
     e.preventDefault();
     const files = await filesFromDrop(e.dataTransfer);
-    if (files.length) uploader.add(files, '');
+    setExtra();
+    if (files.length && !nameNeeded) uploader.add(files, '');
   }
 
   // Closing the tab would abort running uploads.
@@ -163,7 +216,7 @@
 
 <svelte:head><title>{info?.name || 'Shared files'}</title></svelte:head>
 
-<svelte:window {onbeforeunload} />
+<svelte:window {onbeforeunload} {onkeydown} />
 
 {#snippet media(p: string, name: string, mime: string | undefined, autoplay: boolean)}
   {@const k = kindOf({ is_dir: false, mime })}
@@ -219,12 +272,21 @@
       ondrop={onDrop}
     >
       <Icon name="upload" size={48} />
-      <h1>Upload files to "{info.name}"</h1>
+      <h1>{info.title || `Upload files to "${info.name}"`}</h1>
+      {#if info.note}<p class="note">{info.note}</p>{/if}
       <p class="muted">
         Drag and drop files here, or choose them. You will not be able to see other files in this
         folder.
       </p>
-      <button class="primary" onclick={() => fileInput?.click()}>Choose files</button>
+      {#if info.ask_name}
+        <label class="field who">
+          Your name
+          <input bind:value={uploaderName} maxlength="64" autocomplete="name" required />
+        </label>
+      {/if}
+      <button class="primary" disabled={nameNeeded} onclick={() => fileInput?.click()}>
+        Choose files
+      </button>
       <input type="file" multiple hidden bind:this={fileInput} onchange={pick} />
       <p class="muted small">
         {limits ? limits + ' · ' : ''}Link expires {formatDate(info.expires_at)}
@@ -239,7 +301,7 @@
       <div class="row">
         <EntryIcon entry={{ is_dir: false, mime: info.mime }} size={28} />
         <div>
-          <h1 class="fname">{info.name}</h1>
+          <h1 class="fname">{info.title || info.name}</h1>
           <span class="muted small">
             {formatSize(info.size)} · expires {formatDate(info.expires_at)}
             {#if info.downloads_left !== undefined}
@@ -251,6 +313,7 @@
           <Icon name="download" size={16} />Download
         </a>
       </div>
+      {#if info.note}<p class="note">{info.note}</p>{/if}
       <div class="media">
         {#if info.downloads_left !== undefined && !showPreview && (k === 'image' || k === 'video' || k === 'audio' || k === 'pdf')}
           <p class="center"><button onclick={() => (showPreview = true)}>Show preview</button></p>
@@ -281,6 +344,8 @@
         <Icon name="download" size={16} />Download {sub ? 'folder' : 'all'}
       </a>
     </div>
+    {#if info.title}<h1 class="stitle">{info.title}</h1>{/if}
+    {#if info.note}<p class="note">{info.note}</p>{/if}
     <p class="muted small">
       Shared folder · expires {formatDate(info.expires_at)}{info.downloads_left !== undefined
         ? ` · ${info.downloads_left} downloads left`
@@ -321,7 +386,21 @@
         <Icon name="close" />
       </button>
     </header>
-    <div class="ostage">
+    <div
+      class="ostage"
+      role="group"
+      aria-label="Preview"
+      ontouchstart={(e) => (touchX = e.touches[0]?.clientX ?? 0)}
+      ontouchend={onTouchEnd}
+    >
+      {#if previewAt >= 0 && viewable.length > 1}
+        <button class="icon nav prev" aria-label="Previous" onclick={() => step(-1)}>
+          <Icon name="prev" size={28} />
+        </button>
+        <button class="icon nav next" aria-label="Next" onclick={() => step(1)}>
+          <Icon name="next" size={28} />
+        </button>
+      {/if}
       {#if (k === 'image' && isViewableImage(preview.mime)) || k === 'video' || k === 'audio' || k === 'pdf'}
         {@render media(preview.path, preview.name, preview.mime, true)}
       {:else}
@@ -362,6 +441,33 @@
     text-align: center;
     padding: 3rem 1rem;
     border: 2px dashed var(--border);
+  }
+  .note {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+  .stitle {
+    margin: 0.5rem 0 0.2rem;
+  }
+  .who {
+    max-width: 20rem;
+    margin: 0 auto 0.8rem;
+    text-align: left;
+  }
+  .nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    color: #eee;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 50%;
+  }
+  .nav.prev {
+    left: 0.5rem;
+  }
+  .nav.next {
+    right: 0.5rem;
   }
   .drop.over {
     border-color: var(--accent);
@@ -445,6 +551,7 @@
     white-space: nowrap;
   }
   .ostage {
+    position: relative;
     flex: 1;
     display: flex;
     align-items: center;

@@ -100,7 +100,11 @@
               <td>
                 <a href={filesHref(s.is_dir ? s.path : parentPath(s.path))}>{s.name}</a>
                 {#if s.has_password}<span class="badge">password</span>{/if}
-                <div class="muted small">/{s.path}</div>
+                <div class="muted small">
+                  /{s.path}{s.slug ? ` · link name “${s.slug}”` : ''}{s.title
+                    ? ` · ${s.title}`
+                    : ''}
+                </div>
               </td>
               {#if all}<td>{s.owner}</td>{/if}
               <td>{s.kind === 'upload' ? 'Upload' : 'Download'}</td>

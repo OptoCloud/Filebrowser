@@ -55,7 +55,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { fsys.Close() })
 	web := fstest.MapFS{
-		"index.html":                  {Data: []byte(`<!doctype html><script>boot()</script><div id=app></div>`)},
+		"index.html":                  {Data: []byte(`<!doctype html><head><title>Files</title></head><script>boot()</script><div id=app></div>`)},
 		"_app/immutable/entry/app.js": {Data: []byte(`console.log(1)`)},
 	}
 	mcfg := cfg.Media
@@ -737,6 +737,111 @@ func TestDropShareLimits(t *testing.T) {
 	rec, _ = first.tusUpload("/_upload/", "", "a.bin", "x")
 	expect(t, rec, 204)
 	expect(t, first.do("GET", "/s/"+token+"/api/info", nil), 200)
+}
+
+func TestSharePresentation(t *testing.T) {
+	h := newHarness(t)
+	h.user("ines", "user", store.Grant{Path: "ines", Permission: "write"})
+	os.MkdirAll(filepath.Join(h.root, "ines", "inbox"), 0o755)
+	write(t, h.root, "ines/a.txt", "a")
+	c := h.login("ines")
+	create := func(opts map[string]any) (*httptest.ResponseRecorder, string) {
+		rec := c.do("POST", "/api/shares", opts)
+		if rec.Code != 200 {
+			return rec, ""
+		}
+		return rec, strings.TrimPrefix(decode[map[string]any](t, rec)["url"].(string), shareOrigin+"/s/")
+	}
+	page := func(token string) string {
+		rec := h.share().do("GET", "/s/"+token, nil)
+		expect(t, rec, 200)
+		return rec.Body.String()
+	}
+
+	// A link name of the owner's choosing stands in for the token.
+	rec, token := create(map[string]any{"path": "ines/a.txt", "slug": "Holiday-Photos", "title": `Trip <b>"2026"</b>`, "note": "All of it"})
+	expect(t, rec, 200)
+	if token != "holiday-photos" {
+		t.Fatalf("link = %q", token)
+	}
+	expect(t, h.share().do("GET", "/s/holiday-photos/api/info", nil), 200)
+	expect(t, h.share().do("GET", "/s/holiday-photos/file", nil), 200)
+	rec, _ = create(map[string]any{"path": "ines/a.txt", "slug": "holiday-photos"})
+	expect(t, rec, 400) // taken
+	for _, bad := range []string{"ab", "has space", "-lead", "trail-", "a/b", strings.Repeat("x", 65)} {
+		if rec, _ = create(map[string]any{"path": "ines/a.txt", "slug": bad}); rec.Code != 400 {
+			t.Errorf("slug %q: %d", bad, rec.Code)
+		}
+	}
+	// Revoking frees the name.
+	list := decode[[]map[string]any](t, c.do("GET", "/api/shares", nil))
+	expect(t, c.do("DELETE", "/api/shares/"+itoa(int64(list[0]["id"].(float64))), nil), 200)
+	expect(t, h.share().do("GET", "/s/holiday-photos/api/info", nil), 404)
+	rec, _ = create(map[string]any{"path": "ines/a.txt", "slug": "holiday-photos", "title": `Trip <b>"2026"</b>`, "note": "All of it"})
+	expect(t, rec, 200)
+
+	// The preview of a link says what its owner wrote, escaped, and nothing
+	// of the files; fetching it uses no download.
+	body := page("holiday-photos")
+	for _, want := range []string{
+		`<meta property="og:title" content="Trip &lt;b&gt;&#34;2026&#34;&lt;/b&gt;" />`,
+		`<meta property="og:description" content="All of it" />`,
+		`<meta property="og:image" content="` + shareOrigin + `/og.png" />`,
+		`<meta name="theme-color" content="#2563eb" />`,
+		`<meta property="og:site_name" content="filebrowser" />`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("share page lacks %s", want)
+		}
+	}
+	if strings.Contains(body, "a.txt") {
+		t.Error("the preview names the file")
+	}
+	_, plain := create(map[string]any{"path": "ines/a.txt", "max_downloads": 1})
+	generic := page(plain)
+	if !strings.Contains(generic, `og:title" content="Shared files"`) || generic != page("AAAAAAAAAAAAAAAAAAAAAAAA") {
+		t.Error("a link without a title does not have the same preview as an invalid one")
+	}
+	expect(t, h.share().do("GET", "/s/"+plain+"/file", nil), 200) // the one download is still there
+	_, locked := create(map[string]any{"path": "ines/a.txt", "password": "correct horse battery", "title": "Secret plans"})
+	if b := page(locked); !strings.Contains(b, `og:title" content="Protected link"`) || strings.Contains(b, "Secret plans") {
+		t.Error("a locked link's preview says more than that it is locked")
+	}
+	if app := h.app().do("GET", "/login", nil).Body.String(); !strings.Contains(app, `og:title" content="filebrowser"`) {
+		t.Error("the app page has no preview")
+	}
+
+	// A drop link that asks for the uploader's name files by it.
+	_, drop := create(map[string]any{"path": "ines/inbox", "kind": "upload", "ask_name": true})
+	s := h.share()
+	s.headers["X-Share-Token"] = drop
+	up := func(who string) int {
+		s.headers["Tus-Resumable"] = "1.0.0"
+		s.headers["Upload-Length"] = "2"
+		s.headers["Upload-Metadata"] = tusMeta("filename", "f.txt", "dir", "", "uploader", who)
+		rec := s.do("POST", "/_upload/", []byte{})
+		delete(s.headers, "Upload-Length")
+		delete(s.headers, "Upload-Metadata")
+		if rec.Code != 201 {
+			return rec.Code
+		}
+		loc, _ := url.Parse(rec.Header().Get("Location"))
+		s.headers["Upload-Offset"], s.headers["Content-Type"] = "0", "application/offset+octet-stream"
+		defer delete(s.headers, "Upload-Offset")
+		defer delete(s.headers, "Content-Type")
+		return s.do("PATCH", loc.Path, []byte("hi")).Code
+	}
+	for _, bad := range []string{"", "..", "a/b", ".filebrowser"} {
+		if code := up(bad); code < 400 {
+			t.Errorf("uploader %q: %d", bad, code)
+		}
+	}
+	if code := up("Jonas"); code != 204 {
+		t.Fatalf("named upload: %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "ines", "inbox", "Jonas", "f.txt")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAdminAndInvites(t *testing.T) {

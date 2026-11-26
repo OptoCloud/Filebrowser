@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
+	"html"
 	"io/fs"
 	"net/http"
 	"path"
@@ -17,11 +19,44 @@ import (
 // static serves the embedded SPA. index.html is returned for client-side
 // routes; its inline bootstrap scripts are allowed by hash in the CSP.
 type static struct {
-	fsys     fs.FS
-	index    []byte
-	appCSP   string
-	shareCSP string
-	modTime  time.Time
+	fsys fs.FS
+	// The shell up to </head> and from it: the meta tags of the page being
+	// asked for go in between (see page).
+	head, rest []byte
+	appCSP     string
+	shareCSP   string
+	modTime    time.Time
+	cfg        config.Config
+	// shareCard is what a share link's preview may say (see Server.shareCard).
+	shareCard func(r *http.Request) card
+}
+
+// card is what a link says about itself to something that does not run the
+// page: the preview a chat app shows for a pasted link.
+type card struct{ title, description string }
+
+// page is the shell with the meta tags for one request. Nothing is ever
+// counted or claimed by serving it: previews are fetched by the chat app's
+// servers, before and instead of the person the link was sent to.
+func (st *static) page(c card, origin string) []byte {
+	esc := html.EscapeString
+	var b bytes.Buffer
+	b.Write(st.head)
+	for _, m := range [][2]string{
+		{`name="application-name"`, st.cfg.SiteName},
+		{`name="theme-color"`, st.cfg.ThemeColor},
+		{`name="description"`, c.description},
+		{`property="og:site_name"`, st.cfg.SiteName},
+		{`property="og:type"`, "website"},
+		{`property="og:title"`, c.title},
+		{`property="og:description"`, c.description},
+		{`property="og:image"`, origin + "/og.png"},
+		{`name="twitter:card"`, "summary"},
+	} {
+		b.WriteString("<meta " + m[0] + ` content="` + esc(m[1]) + `" />` + "\n")
+	}
+	b.Write(st.rest)
+	return b.Bytes()
 }
 
 var inlineScript = regexp.MustCompile(`(?is)<script((?:\s[^>]*)?)>(.*?)</script>`)
@@ -43,12 +78,18 @@ func newStatic(fsys fs.FS, cfg config.Config) (*static, error) {
 	common := "default-src 'self'; script-src " + scriptSrc + "; style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; " +
 		"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	head, rest, ok := bytes.Cut(index, []byte("</head>"))
+	if !ok {
+		return nil, errors.New("index.html has no </head>")
+	}
 	return &static{
 		fsys:     fsys,
-		index:    index,
+		head:     head,
+		rest:     append([]byte("</head>"), rest...),
 		appCSP:   common + "; frame-src " + cfg.ShareOrigin,
 		shareCSP: common + "; frame-src 'self'",
 		modTime:  time.Now(),
+		cfg:      cfg,
 	}, nil
 }
 
@@ -98,11 +139,14 @@ func (st *static) serve(w http.ResponseWriter, r *http.Request, share bool) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-cache")
+	c, origin := card{st.cfg.SiteName, "Sign in to browse and share files."}, st.cfg.AppOrigin
 	if share {
 		h.Set("Content-Security-Policy", st.shareCSP)
 		h.Set("X-Robots-Tag", "noindex, nofollow")
+		c, origin = st.shareCard(r), st.cfg.ShareOrigin
 	} else {
 		h.Set("Content-Security-Policy", st.appCSP)
 	}
-	http.ServeContent(w, r, "index.html", st.modTime, bytes.NewReader(st.index))
+	// The page differs by link, so it carries no validator to be cached under.
+	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(st.page(c, origin)))
 }

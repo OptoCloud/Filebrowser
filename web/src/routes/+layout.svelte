@@ -4,6 +4,7 @@
   import { page } from '$app/state';
   import { logout } from '#lib/api.js';
   import { filesHref } from '#lib/nav.js';
+  import { siteName } from '#lib/site.js';
   import { appUploader, forgetUploads } from '#lib/upload.svelte.js';
   import Icon from '#lib/components/Icon.svelte';
   import UploadPanel from '#lib/components/UploadPanel.svelte';
@@ -40,7 +41,7 @@
   {@render children()}
 {:else}
   <nav class="top">
-    <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> filebrowser</a>
+    <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> {siteName}</a>
     <button
       class="icon menu-btn"
       onclick={() => (menuOpen = !menuOpen)}

@@ -91,6 +91,8 @@ export class Uploader {
   private active = 0;
   private endpoint: string;
   private headers: Record<string, string>;
+  /** Further tus metadata sent with every upload, read when one starts. */
+  extra: Record<string, string> = {};
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private doneListeners = new Set<(item: UploadItem) => void>();
 
@@ -169,6 +171,7 @@ export class Uploader {
           this.endpoint,
           await digest(this.headers['X-Share-Token'] ?? ''),
           dir,
+          this.extra.uploader ?? '',
           item.relativePath,
           f.size,
           f.lastModified,
@@ -178,6 +181,7 @@ export class Uploader {
         dir,
         relativePath: item.relativePath,
         filetype: file.type || 'application/octet-stream',
+        ...this.extra,
       },
       onProgress: (sent) => {
         item.sent = sent;

@@ -131,6 +131,11 @@ export interface Share {
   single_session: boolean;
   upload_bytes: number;
   upload_files: number;
+  /** A link name chosen by the owner, used in place of the token. */
+  slug: string;
+  title: string;
+  note: string;
+  ask_name: boolean;
 }
 
 export interface Session {
@@ -232,4 +237,9 @@ export interface ShareInfo {
   allowed_types?: string[] | null;
   bytes_left?: number;
   files_left?: number;
+  /** Set by the owner; shown in place of the plain heading. */
+  title?: string;
+  note?: string;
+  /** Drop links: uploaders give their name, and their files go under it. */
+  ask_name?: boolean;
 }

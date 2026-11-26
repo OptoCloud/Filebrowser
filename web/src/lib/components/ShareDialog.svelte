@@ -17,6 +17,11 @@
   let maxFileGB = $state<number | null>(null);
   let types = $state<string[]>([]);
   let singleSession = $state(false);
+  let askName = $state(false);
+  let slug = $state('');
+  let title = $state('');
+  let note = $state('');
+  let qr = $state('');
   const GB = 1024 ** 3;
   const kinds = [
     { value: 'image', label: 'Images' },
@@ -56,9 +61,19 @@
           max_file_bytes: Math.round((maxFileGB || 0) * GB),
           allowed_types: types,
           single_session: singleSession,
+          ask_name: askName,
         }),
+        slug,
+        title,
+        note,
       });
       copied = await copyText(result.url);
+      // The QR code is drawn here, in the browser: the link goes nowhere else.
+      const url = result.url;
+      void import('qrcode')
+        .then((m) => m.default.toDataURL(url, { margin: 1, width: 200 }))
+        .then((d) => (qr = d))
+        .catch(() => {});
     } catch (x) {
       err = errorMessage(x);
     } finally {
@@ -76,6 +91,7 @@
       {formatDate(result.share.expires_at)}.
     </p>
     <CopyField value={result.url} />
+    {#if qr}<img class="qr" src={qr} width="200" height="200" alt="QR code of the link" />{/if}
     {#if copied}
       <p class="notice small">Link copied to the clipboard. It cannot be shown again.</p>
     {:else}
@@ -155,7 +171,49 @@
           <input type="checkbox" bind:checked={singleSession} />
           Only the first browser to open the link may use it
         </label>
+        <label class="inline">
+          <input type="checkbox" bind:checked={askName} />
+          Ask uploaders for their name (their files go into a folder of that name)
+        </label>
       {/if}
+      <details>
+        <summary>Link name, title and note</summary>
+        <label class="field">
+          Link name (optional)
+          <input
+            bind:value={slug}
+            pattern={'[A-Za-z0-9][A-Za-z0-9\\-]{1,62}[A-Za-z0-9]'}
+            maxlength="64"
+            placeholder="e.g. holiday-photos"
+            autocapitalize="none"
+            spellcheck="false"
+          />
+        </label>
+        {#if slug && !password}
+          <p class="warn small">
+            A link with a name can be guessed by anyone who tries that name. Set a password unless
+            the files may be public.
+          </p>
+        {/if}
+        <label class="field">
+          Title (optional)
+          <input
+            bind:value={title}
+            maxlength="100"
+            placeholder="Shown on the page and in previews"
+          />
+        </label>
+        <label class="field">
+          Note (optional)
+          <textarea bind:value={note} maxlength="1000" rows="3"></textarea>
+        </label>
+        {#if (title || note) && !password}
+          <p class="muted small">
+            The title and note appear in the preview when the link is pasted into a chat. File names
+            never do.
+          </p>
+        {/if}
+      </details>
       {#if err}<div class="error" role="alert">{err}</div>{/if}
     </form>
   {/if}
@@ -184,5 +242,21 @@
   legend {
     padding: 0;
     margin-bottom: 0.3rem;
+  }
+  details {
+    margin: 0.8rem 0;
+  }
+  summary {
+    cursor: pointer;
+    margin-bottom: 0.6rem;
+  }
+  textarea {
+    width: 100%;
+    resize: vertical;
+  }
+  .qr {
+    display: block;
+    margin: 0.8rem auto 0;
+    border-radius: var(--radius);
   }
 </style>

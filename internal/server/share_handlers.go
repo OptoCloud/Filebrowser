@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"filebrowser/internal/audit"
@@ -81,7 +82,7 @@ func (s *Server) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	s.audit.Log(ctx, audit.ShareCreated, sh.Path, map[string]any{"share_id": sh.ID, "kind": sh.Kind,
 		"expires_at": sh.ExpiresAt, "password": sh.PasswordHash != "", "max_downloads": sh.MaxDownloads,
 		"max_bytes": sh.MaxBytes, "max_files": sh.MaxFiles, "max_file_bytes": sh.MaxFileBytes,
-		"allowed_types": sh.AllowedTypes, "single_session": sh.SingleSession})
+		"allowed_types": sh.AllowedTypes, "single_session": sh.SingleSession, "slug": sh.Slug, "ask_name": sh.AskName})
 	httpx.JSON(w, http.StatusOK, map[string]any{"share": viewShare(sh), "url": s.shares.URL(token)})
 }
 
@@ -106,6 +107,32 @@ func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 }
 
 // Share origin (public)
+
+// shareCard is what the preview of a share link says. Unless its owner gave
+// the share a title or a note, that is the same for every link, valid or
+// not: nothing of the files (names, sizes, thumbnails), and of a share with
+// a password nothing at all.
+func (s *Server) shareCard(r *http.Request) card {
+	c := card{"Shared files", "A link shared through " + s.cfg.SiteName + "."}
+	token, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/s/"), "/")
+	if !s.shareLimiter.Allow(httpx.LimitKey(r.Context()), time.Now()) {
+		return c
+	}
+	res, err := s.shares.Resolve(r.Context(), token)
+	if err != nil {
+		return c
+	}
+	if res.Share.PasswordHash != "" {
+		return card{"Protected link", "A password is needed to open this link."}
+	}
+	if res.Share.Title != "" {
+		c.title = res.Share.Title
+	}
+	if res.Share.Note != "" {
+		c.description = res.Share.Note
+	}
+	return c
+}
 
 // resolveShare validates the token with per-IP rate limiting on lookups.
 // requireUnlocked also enforces the password.
@@ -184,6 +211,8 @@ func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
 		"expires_at":     sh.ExpiresAt,
 		"needs_password": sh.PasswordHash != "",
 		"unlocked":       true,
+		"title":          sh.Title,
+		"note":           sh.Note,
 	}
 	if !sh.IsDir {
 		if fi, err := s.files.FS.Stat(res.Root); err == nil {
@@ -198,6 +227,7 @@ func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
 		// What the link still accepts, so the page can say so before a
 		// file is sent; -1 is no limit.
 		lim := s.shares.Limits(sh)
+		info["ask_name"] = sh.AskName
 		info["max_file_bytes"], info["allowed_types"] = lim.FileBytes, lim.Types
 		info["bytes_left"], info["files_left"] = int64(-1), -1
 		if lim.Bytes > 0 {

@@ -30,18 +30,35 @@ type Share struct {
 	SessionHash   []byte   `json:"-"`
 	UploadBytes   int64    `json:"upload_bytes"`
 	UploadFiles   int      `json:"upload_files"`
+	// Slug is a link name chosen by the owner, used in place of the token.
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Note  string `json:"note"`
+	// AskName makes a drop link ask uploaders for their name.
+	AskName bool `json:"ask_name"`
 }
 
 const shareCols = `id, token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, download_count, created_at, revoked_at, file_id,
-	max_bytes, max_files, max_file_bytes, allowed_types, single_session, session_hash, upload_bytes, upload_files`
+	max_bytes, max_files, max_file_bytes, allowed_types, single_session, session_hash, upload_bytes, upload_files,
+	slug, title, note, ask_name`
 
 func (s *Store) CreateShare(ctx context.Context, sh *Share) error {
-	return s.pool.QueryRow(ctx, `INSERT INTO shares (token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, file_id,
-			max_bytes, max_files, max_file_bytes, allowed_types, single_session)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, created_at`,
+	err := s.pool.QueryRow(ctx, `INSERT INTO shares (token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, file_id,
+			max_bytes, max_files, max_file_bytes, allowed_types, single_session, slug, title, note, ask_name)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id, created_at`,
 		sh.TokenHash, sh.OwnerID, sh.Path, sh.IsDir, sh.Kind, sh.PasswordHash, sh.ExpiresAt, sh.MaxDownloads, sh.FileID,
 		sh.MaxBytes, sh.MaxFiles, sh.MaxFileBytes, append([]string{}, sh.AllowedTypes...), sh.SingleSession,
+		sh.Slug, sh.Title, sh.Note, sh.AskName,
 	).Scan(&sh.ID, &sh.CreatedAt)
+	if isUniqueViolation(err) {
+		return ErrConflict // the slug is taken
+	}
+	return err
+}
+
+// ShareBySlug finds the share that currently has the link name slug.
+func (s *Store) ShareBySlug(ctx context.Context, slug string) (*Share, error) {
+	return queryOne[Share](ctx, s, `SELECT `+shareCols+` FROM shares WHERE slug = $1 AND revoked_at IS NULL`, slug)
 }
 
 func (s *Store) ShareByTokenHash(ctx context.Context, hash []byte) (*Share, error) {

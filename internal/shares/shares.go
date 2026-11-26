@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,7 +65,25 @@ type CreateRequest struct {
 	MaxFileBytes  int64    `json:"max_file_bytes"`
 	AllowedTypes  []string `json:"allowed_types"`
 	SingleSession bool     `json:"single_session"`
+	// Slug replaces the random token in the link with a name of the owner's
+	// choosing. It is as secret as it is hard to guess.
+	Slug string `json:"slug"`
+	// Title and Note are shown on the share page and in link previews.
+	Title string `json:"title"`
+	Note  string `json:"note"`
+	// AskName (drop links) asks uploaders for their name; their files go
+	// into a folder of that name.
+	AskName bool `json:"ask_name"`
 }
+
+// slugPattern: 3 to 64 lower-case letters, digits and hyphens. It cannot be
+// taken for a token, which is longer than 20 characters of mixed case.
+var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{1,62})[a-z0-9]$`)
+
+const (
+	maxTitleLen = 100
+	maxNoteLen  = 1000
+)
 
 // Create makes a new share. The plaintext token is returned once and never stored.
 func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access, req CreateRequest) (*store.Share, string, error) {
@@ -112,6 +131,13 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 			return nil, "", InputError("unknown file type " + strconv.Quote(t))
 		}
 	}
+	req.Slug, req.Title, req.Note = strings.ToLower(strings.TrimSpace(req.Slug)), strings.TrimSpace(req.Title), strings.TrimSpace(req.Note)
+	if req.Slug != "" && !slugPattern.MatchString(req.Slug) {
+		return nil, "", InputError("a link name is 3 to 64 lower-case letters, digits and hyphens")
+	}
+	if utf8.RuneCountInString(req.Title) > maxTitleLen || utf8.RuneCountInString(req.Note) > maxNoteLen {
+		return nil, "", InputError(fmt.Sprintf("a title is at most %d characters and a note %d", maxTitleLen, maxNoteLen))
+	}
 	var pwHash string
 	if req.Password != "" {
 		if n := utf8.RuneCountInString(req.Password); n < MinPasswordLen || len(req.Password) > auth.MaxPasswordLen {
@@ -138,9 +164,16 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 		FileID:       fileID,
 		MaxBytes:     req.MaxBytes, MaxFiles: req.MaxFiles, MaxFileBytes: req.MaxFileBytes,
 		AllowedTypes: slices.Compact(slices.Sorted(slices.Values(req.AllowedTypes))), SingleSession: req.SingleSession,
+		Slug: req.Slug, Title: req.Title, Note: req.Note, AskName: req.AskName && req.Kind == "upload",
 	}
-	if err := s.Store.CreateShare(ctx, sh); err != nil {
+	if err := s.Store.CreateShare(ctx, sh); errors.Is(err, store.ErrConflict) {
+		return nil, "", InputError("that link name is already in use")
+	} else if err != nil {
 		return nil, "", err
+	}
+	// The link carries the name instead of the token; the token still works.
+	if sh.Slug != "" {
+		token = sh.Slug
 	}
 	return sh, token, nil
 }
@@ -221,10 +254,17 @@ type Resolved struct {
 // Resolve validates a token. It returns ErrInvalid for unknown, revoked or
 // expired shares and for shares whose owner lost access.
 func (s *Service) Resolve(ctx context.Context, token string) (*Resolved, error) {
-	if len(token) < 20 || len(token) > 64 {
+	if len(token) < 3 || len(token) > 64 {
 		return nil, ErrInvalid
 	}
-	sh, err := s.Store.ShareByTokenHash(ctx, s.Keys.HashToken(token))
+	// A token, or the link name of a share that has one.
+	sh, err := (*store.Share)(nil), error(store.ErrNotFound)
+	if len(token) >= 20 {
+		sh, err = s.Store.ShareByTokenHash(ctx, s.Keys.HashToken(token))
+	}
+	if errors.Is(err, store.ErrNotFound) && slugPattern.MatchString(token) {
+		sh, err = s.Store.ShareBySlug(ctx, token)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrInvalid
 	} else if err != nil {

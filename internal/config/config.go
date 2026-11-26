@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -53,6 +54,10 @@ type Config struct {
 	TrustedProxies []string `toml:"trusted_proxies"`
 	// Dev relaxes cookie and HSTS settings for http://localhost development.
 	Dev bool `toml:"dev"`
+	// SiteName and ThemeColor ("#rrggbb") are what the site calls itself in
+	// the pages and in the previews chat apps show for its links.
+	SiteName   string `toml:"site_name"`
+	ThemeColor string `toml:"theme_color"`
 
 	Session Session `toml:"session"`
 	Trash   Trash   `toml:"trash"`
@@ -125,6 +130,8 @@ type OIDC struct {
 func Default() Config {
 	return Config{
 		Listen:         "127.0.0.1:8080",
+		SiteName:       "filebrowser",
+		ThemeColor:     "#2563eb",
 		AppOrigin:      "http://files.localhost:8080",
 		ShareOrigin:    "http://share.localhost:8080",
 		DataDir:        "data",
@@ -215,6 +222,12 @@ func (c Config) Validate() error {
 	if _, err := c.ProxyPrefixes(); err != nil {
 		errs = append(errs, err)
 	}
+	if strings.TrimSpace(c.SiteName) == "" || len(c.SiteName) > 60 {
+		errs = append(errs, errors.New("site_name must be 1 to 60 characters"))
+	}
+	if !themeColor.MatchString(c.ThemeColor) {
+		errs = append(errs, errors.New(`theme_color must be a colour like "#2563eb"`))
+	}
 	if c.FilesRoot == "" {
 		errs = append(errs, errors.New("files_root is required"))
 	}
@@ -252,6 +265,8 @@ func (c Config) Validate() error {
 	}
 	return errors.Join(errs...)
 }
+
+var themeColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // AppHost and ShareHost return the host[:port] of each origin.
 func (c Config) AppHost() string   { u, _ := url.Parse(c.AppOrigin); return u.Host }

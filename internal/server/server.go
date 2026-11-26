@@ -166,6 +166,7 @@ func New(d Deps) (*Server, error) {
 	if s.static, err = newStatic(d.Web, cfg); err != nil {
 		return nil, err
 	}
+	s.static.shareCard = s.shareCard
 	s.routes()
 	return s, nil
 }
