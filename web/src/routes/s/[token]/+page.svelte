@@ -7,13 +7,11 @@
   import { formatDate, formatSize, isViewableImage, kindOf, pathCrumbs } from '#lib/format.js';
   import { LatestRequest } from '#lib/latest.js';
   import { shareHref } from '#lib/nav.js';
-  import { PREF, loadPref, savePref } from '#lib/prefs.js';
   import type { Entry, ShareInfo } from '#lib/types.js';
-  import { Uploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
   import EntryIcon from '#lib/components/EntryIcon.svelte';
   import EntryThumb from '#lib/components/EntryThumb.svelte';
   import Icon from '#lib/components/Icon.svelte';
-  import UploadList from '#lib/components/UploadList.svelte';
+  import DropUpload from './DropUpload.svelte';
 
   // The layout re-creates this page when the token changes, so it is fixed per instance.
   const token = page.params.token ?? '';
@@ -34,30 +32,10 @@
 
   // Inline previews count against a download limit, so do not load them unasked.
   let showPreview = $state(false);
-  let uploader = $state<Uploader | null>(null);
-  let fileInput: HTMLInputElement | undefined = $state();
-  let dragging = $state(0);
-  // Drop links that ask for it: the uploader's name, kept for the next visit.
-  let uploaderName = $state(loadPref(PREF.uploader, ''));
-  const nameNeeded = $derived(!!info?.ask_name && !uploaderName.trim());
-
-  function setExtra() {
-    if (!uploader || !info?.ask_name) return;
-    uploader.extra = { uploader: uploaderName.trim() };
-    savePref(PREF.uploader, uploaderName.trim());
-  }
-
   async function loadInfo() {
     fatal = '';
     try {
       info = await get<ShareInfo>(base + '/api/info');
-      if (info.unlocked && info.kind === 'upload' && !uploader) {
-        uploader = new Uploader('/_upload/', { 'X-Share-Token': token });
-        if (info.r2_threshold !== undefined)
-          uploader.r2 = { base: '/_r2/', threshold: info.r2_threshold };
-        // What the link still accepts changes with every file it takes.
-        uploader.onFileDone(() => void loadInfo());
-      }
     } catch (e) {
       fatal = !(e instanceof ApiError)
         ? errorMessage(e)
@@ -90,11 +68,7 @@
 
   $effect(() => {
     void untrack(loadInfo);
-    // Leaving the share stops its uploads; they could not be shown anywhere else.
-    return () => {
-      listReq.abort();
-      uploader?.cancelAll();
-    };
+    return () => listReq.abort();
   });
 
   const unlocked = $derived(!!info && (!info.needs_password || info.unlocked));
@@ -160,55 +134,11 @@
     const dx = (e.changedTouches[0]?.clientX ?? touchX) - touchX;
     if (Math.abs(dx) > 60) step(dx < 0 ? 1 : -1);
   }
-
-  const typeNames: Record<string, string> = {
-    image: 'images',
-    video: 'video',
-    audio: 'audio',
-    document: 'documents',
-    archive: 'archives',
-  };
-  // What a drop link still accepts, in words.
-  const limits = $derived.by(() => {
-    if (!info || info.kind !== 'upload') return '';
-    const parts: string[] = [];
-    if (info.allowed_types?.length)
-      parts.push(
-        'Accepts ' + info.allowed_types.map((t) => typeNames[t] ?? t).join(', ') + ' only'
-      );
-    if (info.files_left !== undefined && info.files_left >= 0)
-      parts.push(info.files_left + (info.files_left === 1 ? ' file left' : ' files left'));
-    if (info.bytes_left !== undefined && info.bytes_left >= 0)
-      parts.push(formatSize(info.bytes_left) + ' left');
-    if (info.max_file_bytes) parts.push('up to ' + formatSize(info.max_file_bytes) + ' per file');
-    return parts.join(' · ');
-  });
-
-  function pick() {
-    if (!fileInput || !uploader) return;
-    const files = filesFromInput(fileInput.files);
-    setExtra();
-    if (files.length && !nameNeeded) uploader.add(files, '');
-    fileInput.value = '';
-  }
-  async function onDrop(e: DragEvent) {
-    dragging = 0;
-    if (!uploader || !e.dataTransfer) return;
-    e.preventDefault();
-    const files = await filesFromDrop(e.dataTransfer);
-    setExtra();
-    if (files.length && !nameNeeded) uploader.add(files, '');
-  }
-
-  // Closing the tab would abort running uploads.
-  function onbeforeunload(e: BeforeUnloadEvent) {
-    if (uploader?.busy) e.preventDefault();
-  }
 </script>
 
 <svelte:head><title>{info?.name || 'Shared files'}</title></svelte:head>
 
-<svelte:window {onbeforeunload} {onkeydown} />
+<svelte:window {onkeydown} />
 
 {#snippet media(p: string, name: string, mime: string | undefined, autoplay: boolean)}
   {@const k = kindOf({ is_dir: false, mime })}
@@ -253,40 +183,7 @@
       {#if pwErr}<div class="error" role="alert">{pwErr}</div>{/if}
     </div>
   {:else if info.kind === 'upload'}
-    <div
-      class="card drop"
-      class:over={dragging > 0}
-      role="region"
-      aria-label="Upload area"
-      ondragenter={(e) => (e.preventDefault(), dragging++)}
-      ondragover={(e) => e.preventDefault()}
-      ondragleave={() => (dragging = Math.max(0, dragging - 1))}
-      ondrop={onDrop}
-    >
-      <Icon name="upload" size={48} />
-      <h1>{info.title || `Upload files to "${info.name}"`}</h1>
-      {#if info.note}<p class="note">{info.note}</p>{/if}
-      <p class="muted">
-        Drag and drop files here, or choose them. You will not be able to see other files in this
-        folder.
-      </p>
-      {#if info.ask_name}
-        <label class="field who">
-          Your name
-          <input bind:value={uploaderName} maxlength="64" autocomplete="name" required />
-        </label>
-      {/if}
-      <button class="primary" disabled={nameNeeded} onclick={() => fileInput?.click()}>
-        Choose files
-      </button>
-      <input type="file" multiple hidden bind:this={fileInput} onchange={pick} />
-      <p class="muted small">
-        {limits ? limits + ' · ' : ''}Link expires {formatDate(info.expires_at)}
-      </p>
-    </div>
-    {#if uploader && uploader.items.length}
-      <div class="card"><UploadList {uploader} /></div>
-    {/if}
+    <DropUpload {token} {info} onuploaded={() => void loadInfo()} />
   {:else if !info.is_dir}
     {@const k = kindOf({ is_dir: false, mime: info.mime })}
     <div class="card file">
@@ -429,22 +326,12 @@
   h1 {
     margin: 0.5rem 0;
   }
-  .drop {
-    text-align: center;
-    padding: 3rem 1rem;
-    border: 2px dashed var(--border);
-  }
   .note {
     white-space: pre-line;
     overflow-wrap: anywhere;
   }
   .stitle {
     margin: 0.5rem 0 0.2rem;
-  }
-  .who {
-    max-width: 20rem;
-    margin: 0 auto 0.8rem;
-    text-align: left;
   }
   .nav {
     position: absolute;
@@ -460,10 +347,6 @@
   }
   .nav.next {
     right: 0.5rem;
-  }
-  .drop.over {
-    border-color: var(--accent);
-    background: var(--accent-soft);
   }
   .fname {
     font-size: 1.15rem;
