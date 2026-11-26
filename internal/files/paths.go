@@ -8,6 +8,7 @@ package files
 import (
 	"errors"
 	"path"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -54,7 +55,7 @@ func Clean(p string) (string, error) {
 		if IsReservedName(c) {
 			return "", ErrForbidden
 		}
-		if len(c) > 255 {
+		if len(c) > 255 || (runtime.GOOS == "windows" && !portable(c)) {
 			return "", ErrBadPath
 		}
 		out = append(out, c)
@@ -62,9 +63,12 @@ func Clean(p string) (string, error) {
 	return strings.Join(out, "/"), nil
 }
 
-// ValidName checks a single path component supplied by a client (new file or
-// folder names).
-func ValidName(name string) error {
+// ValidComponent checks a single path component that names an existing
+// entry. On Windows it also refuses what the filesystem would read as
+// something other than the name given: a colon (an alternate data stream, or
+// "::$INDEX_ALLOCATION" for the directory itself) and trailing dots and
+// spaces, which are dropped.
+func ValidComponent(name string) error {
 	if name == "" || name == "." || name == ".." || IsReservedName(name) || len(name) > 255 || !utf8.ValidString(name) ||
 		strings.ContainsAny(name, "/\\\x00") || strings.TrimSpace(name) == "" {
 		return ErrBadPath
@@ -74,7 +78,42 @@ func ValidName(name string) error {
 			return ErrBadPath
 		}
 	}
+	if runtime.GOOS == "windows" && !portable(name) {
+		return ErrBadPath
+	}
 	return nil
+}
+
+// ValidName checks a name a client gives to something new (a folder, a
+// rename, an upload). Besides ValidComponent it holds on every platform to
+// the names all of them can store, so that what is made here can be copied
+// anywhere: none of < > : " | ? *, no trailing dot or space, and none of
+// Windows' device names. Files that already have such names stay readable.
+func ValidName(name string) error {
+	if err := ValidComponent(name); err != nil {
+		return err
+	}
+	if !portable(name) {
+		return ErrBadPath
+	}
+	return nil
+}
+
+// portable reports a name that means the same on every filesystem.
+func portable(name string) bool {
+	if strings.ContainsAny(name, `<>:"|?*`) || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return false
+	}
+	// CON, NUL, COM1 and the like are devices on Windows, with any extension.
+	stem, _, _ := strings.Cut(name, ".")
+	switch stem = strings.ToUpper(strings.TrimRight(stem, " ")); stem {
+	case "CON", "PRN", "AUX", "NUL":
+		return false
+	}
+	if len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '1' && stem[3] <= '9' {
+		return false
+	}
+	return true
 }
 
 // Within reports whether p equals base or lies below it.

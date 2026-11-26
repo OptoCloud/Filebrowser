@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,25 @@ func TestValidName(t *testing.T) {
 		}
 	}
 	for _, n := range []string{"a", "photo (1).jpg", ".hidden", "ünïcode"} {
+		if err := ValidName(n); err != nil {
+			t.Errorf("ValidName(%q): %v", n, err)
+		}
+	}
+}
+
+// New names are ones every platform can store; names that already exist are
+// only held to that where the filesystem would misread them (Windows).
+func TestPortableNames(t *testing.T) {
+	for _, n := range []string{"a:b", "x.txt:stream", "what?.txt", "a*b", `say "hi"`, "a<b", "a>b", "a|b",
+		"trailing.", "trailing ", "CON", "con.txt", "NUL", "Aux.tar.gz", "COM1", "lpt9.log"} {
+		if ValidName(n) == nil {
+			t.Errorf("ValidName(%q) accepted", n)
+		}
+		if err := ValidComponent(n); (err == nil) != (runtime.GOOS != "windows") {
+			t.Errorf("ValidComponent(%q) on %s: %v", n, runtime.GOOS, err)
+		}
+	}
+	for _, n := range []string{"COM10", "console.txt", "nul-terminated.c", "a.b.c", ".hidden", "LPT", "com0"} {
 		if err := ValidName(n); err != nil {
 			t.Errorf("ValidName(%q): %v", n, err)
 		}

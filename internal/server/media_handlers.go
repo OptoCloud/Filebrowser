@@ -196,7 +196,7 @@ func (s *Server) handleMediaSubtitle(w http.ResponseWriter, r *http.Request) {
 	}
 	src, track := p, -1
 	if sc := q.Get("sidecar"); sc != "" {
-		if files.ValidName(sc) != nil || !media.IsSidecar(sc) {
+		if files.ValidComponent(sc) != nil || !media.IsSidecar(sc) {
 			httpx.FileError(w, r, files.ErrBadPath)
 			return
 		}

@@ -118,7 +118,7 @@ func reject(status int, msg string) tushandler.Error {
 func target(base string, meta tushandler.MetaData) (dir, name string, err error) {
 	name = meta["filename"]
 	if files.ValidName(name) != nil {
-		return "", "", reject(http.StatusBadRequest, "invalid file name")
+		return "", "", reject(http.StatusBadRequest, `invalid file name (names cannot contain < > : " | ? * or end in a dot or space)`)
 	}
 	sub, err := files.Clean(meta["dir"])
 	if err != nil {
