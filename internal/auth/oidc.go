@@ -134,12 +134,7 @@ func (p *oidcProvider) init(ctx context.Context, redirect string) error {
 	return nil
 }
 
-func (o *OIDC) cookieName() string {
-	if o.secure {
-		return "__Host-oidc"
-	}
-	return "fb_oidc"
-}
+func (o *OIDC) cookieName() string { return CookieName(o.secure, "oidc", "fb_oidc") }
 
 // Start returns the provider authorization URL and sets the state cookie.
 // linkUserID > 0 links the identity to an existing, logged-in user, whose

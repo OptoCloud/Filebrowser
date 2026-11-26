@@ -206,12 +206,7 @@ func (l Limits) Allows(mime string) bool {
 	return len(l.Types) == 0 || slices.Contains(l.Types, files.Category(mime))
 }
 
-func (s *Service) sessionCookieName(id int64) string {
-	if s.Secure {
-		return "__Host-fbd" + strconv.FormatInt(id, 10)
-	}
-	return "fbd" + strconv.FormatInt(id, 10)
-}
+func (s *Service) sessionCookieName(id int64) string { return s.cookieName("fbd", id) }
 
 // Session reports whether the browser may use sh: always, unless sh is a
 // single-session link, which admits only the first browser to open it. With
@@ -340,15 +335,12 @@ func (r *Resolved) Rel(full string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(full, r.Root), "/")
 }
 
-func (s *Service) unlockCookieName(id int64) string {
-	if s.Secure {
-		return "__Host-fbs" + strconv.FormatInt(id, 10)
-	}
-	return "fbs" + strconv.FormatInt(id, 10)
-}
+func (s *Service) unlockCookieName(id int64) string { return s.cookieName("fbs", id) }
 
-func (s *Service) unlockMsg(sh *store.Share, exp int64) []byte {
-	return []byte(fmt.Sprintf("%d|%d|%s", sh.ID, exp, sh.PasswordHash))
+// unlockSubject is what an unlock cookie vouches for: the share with the
+// password it had, so that a changed password asks again.
+func unlockSubject(sh *store.Share) string {
+	return strconv.FormatInt(sh.ID, 10) + "|" + sh.PasswordHash
 }
 
 // Unlocked reports whether r carries a valid unlock cookie (or no password is set).
@@ -357,19 +349,7 @@ func (s *Service) Unlocked(r *http.Request, sh *store.Share) bool {
 		return true
 	}
 	c, err := r.Cookie(s.unlockCookieName(sh.ID))
-	if err != nil {
-		return false
-	}
-	expStr, sigStr, ok := strings.Cut(c.Value, ".")
-	if !ok {
-		return false
-	}
-	exp, err := strconv.ParseInt(expStr, 10, 64)
-	if err != nil || time.Now().Unix() > exp {
-		return false
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(sigStr)
-	return err == nil && s.Keys.Verify("share-unlock", s.unlockMsg(sh, exp), sig)
+	return err == nil && s.validUntil(purposeUnlock, unlockSubject(sh), c.Value)
 }
 
 // Unlock verifies the password and sets the unlock cookie.
@@ -380,14 +360,7 @@ func (s *Service) Unlock(w http.ResponseWriter, sh *store.Share, password string
 	if !auth.VerifyPassword(sh.PasswordHash, password) {
 		return false
 	}
-	exp := min(time.Now().Add(12*time.Hour).Unix(), sh.ExpiresAt.Unix())
-	sig := s.Keys.Sign("share-unlock", s.unlockMsg(sh, exp))
-	auth.SetCookie(w, auth.Cookie{
-		Name:     s.unlockCookieName(sh.ID),
-		Value:    strconv.FormatInt(exp, 10) + "." + base64.RawURLEncoding.EncodeToString(sig),
-		Expires:  time.Unix(exp, 0),
-		SameSite: http.SameSiteLaxMode,
-	}, s.Secure)
+	s.setUntil(w, s.unlockCookieName(sh.ID), purposeUnlock, unlockSubject(sh), time.Now().Add(unlockWindow), sh)
 	return true
 }
 
@@ -460,12 +433,7 @@ func (s *Service) linkURL(l Link, name string) string {
 	return s.ShareOrigin + "/x/" + s.SignLink(l) + "/" + httpx.PathEscape(name)
 }
 
-func (s *Service) countedCookieName(id int64) string {
-	if s.Secure {
-		return "__Host-fbc" + strconv.FormatInt(id, 10)
-	}
-	return "fbc" + strconv.FormatInt(id, 10)
-}
+func (s *Service) countedCookieName(id int64) string { return s.cookieName("fbc", id) }
 
 // countedWindow is how long a browser that used a download of a limited
 // link may keep using it (seeking in a video, resuming, listing again)
@@ -473,18 +441,52 @@ func (s *Service) countedCookieName(id int64) string {
 // window is what bounds a copy of it handed to someone else.
 const countedWindow = 24 * time.Hour
 
-func countedMsg(sh *store.Share, exp int64) []byte {
-	return []byte(strconv.FormatInt(sh.ID, 10) + "|" + strconv.FormatInt(exp, 10))
-}
-
 // Counted reports whether this browser has used a download of sh recently
 // enough to go on without using another.
 func (s *Service) Counted(r *http.Request, sh *store.Share) bool {
 	c, err := r.Cookie(s.countedCookieName(sh.ID))
-	if err != nil {
-		return false
-	}
-	expStr, sigStr, ok := strings.Cut(c.Value, ".")
+	return err == nil && s.validUntil(purposeCounted, strconv.FormatInt(sh.ID, 10), c.Value)
+}
+
+// MarkCounted records that this browser has used a download of sh.
+func (s *Service) MarkCounted(w http.ResponseWriter, sh *store.Share) {
+	s.setUntil(w, s.countedCookieName(sh.ID), purposeCounted, strconv.FormatInt(sh.ID, 10), time.Now().Add(countedWindow), sh)
+}
+
+// The share origin's cookies are the server's word, signed and dated, about
+// what a browser has done with a share: "<expiry>.<signature>", where the
+// signature is over the subject and the expiry under a purpose of its own.
+const (
+	purposeUnlock  = "share-unlock"
+	purposeCounted = "share-counted"
+	// unlockWindow is how long a share stays unlocked after its password.
+	unlockWindow = 12 * time.Hour
+)
+
+func (s *Service) cookieName(tag string, id int64) string {
+	n := tag + strconv.FormatInt(id, 10)
+	return auth.CookieName(s.Secure, n, n)
+}
+
+func untilMsg(subject string, exp int64) []byte {
+	return []byte(subject + "|" + strconv.FormatInt(exp, 10))
+}
+
+// setUntil sets a cookie vouching for subject until the given time, or
+// until the share expires if that is sooner.
+func (s *Service) setUntil(w http.ResponseWriter, name, purpose, subject string, until time.Time, sh *store.Share) {
+	exp := min(until.Unix(), sh.ExpiresAt.Unix())
+	sig := s.Keys.Sign(purpose, untilMsg(subject, exp))
+	auth.SetCookie(w, auth.Cookie{
+		Name:    name,
+		Value:   strconv.FormatInt(exp, 10) + "." + base64.RawURLEncoding.EncodeToString(sig),
+		Expires: time.Unix(exp, 0), SameSite: http.SameSiteLaxMode,
+	}, s.Secure)
+}
+
+// validUntil checks a value made by setUntil for subject.
+func (s *Service) validUntil(purpose, subject, value string) bool {
+	expStr, sigStr, ok := strings.Cut(value, ".")
 	if !ok {
 		return false
 	}
@@ -493,16 +495,5 @@ func (s *Service) Counted(r *http.Request, sh *store.Share) bool {
 		return false
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(sigStr)
-	return err == nil && s.Keys.Verify("share-counted", countedMsg(sh, exp), sig)
-}
-
-// MarkCounted records that this browser has used a download of sh.
-func (s *Service) MarkCounted(w http.ResponseWriter, sh *store.Share) {
-	exp := min(time.Now().Add(countedWindow).Unix(), sh.ExpiresAt.Unix())
-	sig := s.Keys.Sign("share-counted", countedMsg(sh, exp))
-	auth.SetCookie(w, auth.Cookie{
-		Name:    s.countedCookieName(sh.ID),
-		Value:   strconv.FormatInt(exp, 10) + "." + base64.RawURLEncoding.EncodeToString(sig),
-		Expires: time.Unix(exp, 0), SameSite: http.SameSiteLaxMode,
-	}, s.Secure)
+	return err == nil && s.Keys.Verify(purpose, untilMsg(subject, exp), sig)
 }

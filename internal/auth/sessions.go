@@ -29,12 +29,7 @@ func (m *Sessions) now() time.Time {
 	return time.Now()
 }
 
-func (m *Sessions) CookieName() string {
-	if m.Secure {
-		return "__Host-session"
-	}
-	return "fb_session"
-}
+func (m *Sessions) CookieName() string { return CookieName(m.Secure, "session", "fb_session") }
 
 // Create starts a new session, replacing (rotating) any session presented in r.
 func (m *Sessions) Create(ctx context.Context, w http.ResponseWriter, r *http.Request, userID int64, method string, mfa bool, ip string) (*store.Session, error) {

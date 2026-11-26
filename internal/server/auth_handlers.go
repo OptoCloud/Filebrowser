@@ -223,10 +223,7 @@ func (s *Server) verifyTOTP(r *http.Request, user *store.User, code string) bool
 }
 
 func (s *Server) pendingCookie() string {
-	if s.sessions.Secure {
-		return "__Host-pending"
-	}
-	return "fb_pending"
+	return auth.CookieName(s.sessions.Secure, "pending", "fb_pending")
 }
 
 // pendingToken is the pending login a second-factor request is for: the one
