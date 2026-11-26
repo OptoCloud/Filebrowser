@@ -131,68 +131,48 @@ func partLen(size, partSize int64, n int) int64 {
 	return partSize
 }
 
-func (r *R2) begin(w http.ResponseWriter, req *http.Request, a *r2Actor) {
-	var in struct {
-		Dir          string `json:"dir"`
-		Name         string `json:"name"`
-		RelativePath string `json:"relative_path"`
-		Uploader     string `json:"uploader"`
-		Size         int64  `json:"size"`
+// r2Begin is what a client says of the file it wants to send.
+type r2Begin struct {
+	Dir          string `json:"dir"`
+	Name         string `json:"name"`
+	RelativePath string `json:"relative_path"`
+	Uploader     string `json:"uploader"`
+	Size         int64  `json:"size"`
+}
+
+// r2ObjectPrefix is where uploads lie in the bucket, by upload id.
+const r2ObjectPrefix = "uploads/"
+
+// refuse answers with a rejection, saying when to try again where that helps.
+func refuse(w http.ResponseWriter, err error) {
+	status, msg := rejection(err)
+	switch status {
+	case http.StatusTooManyRequests:
+		w.Header().Set("Retry-After", "60")
+	case http.StatusServiceUnavailable:
+		w.Header().Set("Retry-After", "600")
 	}
+	httpx.Error(w, status, msg)
+}
+
+// begin starts an upload: it decides where the file would go and whether it
+// may, reserves what it will take, and opens the upload in the bucket.
+func (r *R2) begin(w http.ResponseWriter, req *http.Request, a *r2Actor) {
+	var in r2Begin
 	if !httpx.Decode(w, req, &in) {
 		return
 	}
 	ctx := req.Context()
-	fail := func(status int, msg string) { httpx.Error(w, status, msg) }
-	if in.Size <= 0 || in.Size > r.u.maxSize {
-		fail(http.StatusRequestEntityTooLarge, "file too large")
-		return
-	}
-	meta := tushandler.MetaData{"filename": in.Name, "dir": in.Dir, "relativePath": in.RelativePath, metaUploader: in.Uploader}
-	var dir, name string
-	var lim shares.Limits
-	var err error
-	if a.share != nil {
-		if r.u.allowDrop != nil && !r.u.allowDrop(httpx.LimitKey(ctx)) {
-			w.Header().Set("Retry-After", "60")
-			fail(http.StatusTooManyRequests, "too many uploads, try again later")
-			return
-		}
-		dir, name, lim, err = r.u.dropPlan(a.share, meta, in.Size)
-	} else if dir, name, err = target("", meta); err == nil {
-		if dir, err = r.u.files.FS.Authorize(a.access, dir, files.PermWrite); err != nil {
-			err = reject(http.StatusForbidden, "forbidden")
-		}
-	}
+	dir, name, lim, err := r.plan(ctx, a, in)
 	if err != nil {
-		fail(rejection(err))
-		return
-	}
-	// What the bucket may come to hold at once is bounded: it is what it can cost.
-	if pending, err := r.store.R2PendingBytes(ctx); err != nil {
-		httpx.InternalError(w, req, err)
-		return
-	} else if pending+in.Size > r.cfg.MaxPendingBytes {
-		w.Header().Set("Retry-After", "600")
-		fail(http.StatusServiceUnavailable, "too many large uploads are in progress, try again later")
+		refuse(w, err)
 		return
 	}
 	id := auth.NewToken(16)
-	if !r.u.files.Reserve(ctx, id, a.user.ID, a.access, in.Size, a.user.QuotaBytes) {
-		fail(http.StatusRequestEntityTooLarge, "quota exceeded")
+	undo, err := r.reserve(ctx, a, id, in.Size, lim)
+	if err != nil {
+		refuse(w, err)
 		return
-	}
-	undo := func() { r.u.files.Release(id) }
-	if a.share != nil {
-		if err := r.u.reserveDrop(ctx, a.share.Share.ID, in.Size, lim); err != nil {
-			undo()
-			fail(rejection(err))
-			return
-		}
-		undo = func() {
-			r.u.files.Release(id)
-			r.u.releaseDrop(ctx, a.owner, in.Size)
-		}
 	}
 	// Parts are all of one size but the last; a very large file gets larger parts.
 	partSize := r.cfg.PartSize
@@ -200,19 +180,78 @@ func (r *R2) begin(w http.ResponseWriter, req *http.Request, a *r2Actor) {
 		partSize *= 2
 	}
 	up := &store.R2Upload{ID: id, Owner: a.owner, UserID: a.user.ID, DestDir: dir, Name: name, Size: in.Size,
-		PartSize: partSize, ObjectKey: "uploads/" + id}
-	if up.UploadID, err = r.client.CreateMultipartUpload(ctx, up.ObjectKey); err == nil {
-		if err = r.store.CreateR2Upload(ctx, up); err != nil {
-			_ = r.client.AbortMultipartUpload(context.WithoutCancel(ctx), up.ObjectKey, up.UploadID)
-		}
-	}
-	if err != nil {
+		PartSize: partSize, ObjectKey: r2ObjectPrefix + id}
+	if err := r.open(ctx, up); err != nil {
 		undo()
 		slog.Error("r2 begin", "err", err)
-		fail(http.StatusBadGateway, "the upload could not be started")
+		httpx.Error(w, http.StatusBadGateway, "the upload could not be started")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"id": id, "part_size": partSize, "parts": partCount(in.Size, partSize)})
+}
+
+// plan decides where the file of in would be stored, and whether it may be:
+// the size, the destination and, on a drop link, the link's own limits and
+// rate. Errors are rejections.
+func (r *R2) plan(ctx context.Context, a *r2Actor, in r2Begin) (dir, name string, lim shares.Limits, err error) {
+	if in.Size <= 0 || in.Size > r.u.maxSize {
+		return "", "", lim, reject(http.StatusRequestEntityTooLarge, "file too large")
+	}
+	meta := tushandler.MetaData{"filename": in.Name, "dir": in.Dir, "relativePath": in.RelativePath, metaUploader: in.Uploader}
+	if a.share != nil {
+		if r.u.allowDrop != nil && !r.u.allowDrop(httpx.LimitKey(ctx)) {
+			return "", "", lim, reject(http.StatusTooManyRequests, "too many uploads, try again later")
+		}
+		return r.u.dropPlan(a.share, meta, in.Size)
+	}
+	if dir, name, err = target("", meta); err != nil {
+		return "", "", lim, err
+	}
+	if dir, err = r.u.files.FS.Authorize(a.access, dir, files.PermWrite); err != nil {
+		return "", "", lim, reject(http.StatusForbidden, "forbidden")
+	}
+	return dir, name, lim, nil
+}
+
+// reserve takes what an upload of size bytes will need: room in the bucket
+// (what it may hold at once is bounded, being what it can cost), the
+// owner's quota and, on a drop link, the link's allowance. undo gives it all
+// back. Errors are rejections.
+func (r *R2) reserve(ctx context.Context, a *r2Actor, id string, size int64, lim shares.Limits) (undo func(), err error) {
+	pending, err := r.store.R2PendingBytes(ctx)
+	if err != nil {
+		slog.Error("r2 pending", "err", err)
+		return nil, reject(http.StatusInternalServerError, "internal error")
+	}
+	if pending+size > r.cfg.MaxPendingBytes {
+		return nil, reject(http.StatusServiceUnavailable, "too many large uploads are in progress, try again later")
+	}
+	if !r.u.files.Reserve(ctx, id, a.user.ID, a.access, size, a.user.QuotaBytes) {
+		return nil, reject(http.StatusRequestEntityTooLarge, "quota exceeded")
+	}
+	if a.share == nil {
+		return func() { r.u.files.Release(id) }, nil
+	}
+	if err := r.u.reserveDrop(ctx, a.share.Share.ID, size, lim); err != nil {
+		r.u.files.Release(id)
+		return nil, err
+	}
+	return func() {
+		r.u.files.Release(id)
+		r.u.releaseDrop(ctx, a.owner, size)
+	}, nil
+}
+
+// open starts the multipart upload in the bucket and records it; an upload
+// that could not be recorded is not left in the bucket.
+func (r *R2) open(ctx context.Context, up *store.R2Upload) (err error) {
+	if up.UploadID, err = r.client.CreateMultipartUpload(ctx, up.ObjectKey); err != nil {
+		return err
+	}
+	if err = r.store.CreateR2Upload(ctx, up); err != nil {
+		_ = r.client.AbortMultipartUpload(context.WithoutCancel(ctx), up.ObjectKey, up.UploadID)
+	}
+	return err
 }
 
 // own loads the upload id if it is the actor's and in state.
