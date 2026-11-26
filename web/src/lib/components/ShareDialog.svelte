@@ -1,6 +1,6 @@
 <script lang="ts">
   import { copyText, errorMessage, post } from '#lib/api.js';
-  import { formatDate } from '#lib/format.js';
+  import { GB, formatDate } from '#lib/format.js';
   import type { Entry, Share } from '#lib/types.js';
   import CopyField from './CopyField.svelte';
   import Modal from './Modal.svelte';
@@ -22,7 +22,6 @@
   let title = $state('');
   let note = $state('');
   let qr = $state('');
-  const GB = 1024 ** 3;
   const kinds = [
     { value: 'image', label: 'Images' },
     { value: 'video', label: 'Video' },

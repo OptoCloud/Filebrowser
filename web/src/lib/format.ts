@@ -1,3 +1,6 @@
+/** Bytes in a gigabyte, as sizes are entered in the forms. */
+export const GB = 1024 ** 3;
+
 export function formatSize(n: number | undefined | null): string {
   if (n === undefined || n === null) return '';
   if (n < 1024) return `${n} B`;
