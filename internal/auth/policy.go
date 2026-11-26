@@ -106,7 +106,7 @@ func monotonous(pw string) bool {
 // pwned returns how often the password appears in known breaches, 0 if
 // never or if that could not be found out.
 func (p *PasswordPolicy) pwned(ctx context.Context, pw string) int {
-	sum := sha1.Sum([]byte(pw)) // #nosec G401 -- see the import
+	sum := sha1.Sum([]byte(pw)) // #nosec G401 -- see the import // nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-sha1
 	digest := strings.ToUpper(hex.EncodeToString(sum[:]))
 	base := p.RangeURL
 	if base == "" {

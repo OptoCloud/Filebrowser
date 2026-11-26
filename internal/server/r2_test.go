@@ -49,7 +49,7 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		signed := strings.Contains(q.Get("X-Amz-SignedHeaders"), "content-length")
 		if f.uploads[id] == nil || !signed {
-			http.Error(w, "no", 403)
+			http.Error(w, "no", http.StatusForbidden)
 			return
 		}
 		n, _ := strconv.Atoi(q.Get("partNumber"))

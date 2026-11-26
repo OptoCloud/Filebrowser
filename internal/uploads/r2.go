@@ -567,7 +567,7 @@ func (r *R2) pull(ctx context.Context, up *store.R2Upload) (string, error) {
 func (r *R2) copyChecked(w io.Writer, body io.Reader, up *store.R2Upload, parts []r2.Part) error {
 	var total int64
 	for _, p := range parts {
-		var h hash.Hash = md5.New() // #nosec G401 -- see the import
+		var h hash.Hash = md5.New() // #nosec G401 -- see the import // nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5
 		n, err := io.Copy(io.MultiWriter(w, h), io.LimitReader(body, p.Size))
 		total += n
 		if err != nil {
