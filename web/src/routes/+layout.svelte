@@ -12,6 +12,11 @@
   let { data, children } = $props();
 
   const me = $derived(data.me);
+  // With an upload bucket on the server, large files go through it.
+  $effect(() => {
+    appUploader.r2 =
+      me?.r2_threshold !== undefined ? { base: '/api/r2/', threshold: me.r2_threshold } : null;
+  });
   const shareMode = $derived(page.url.pathname.startsWith('/s/'));
   let menuOpen = $state(false);
 

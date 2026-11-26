@@ -63,6 +63,8 @@
       info = await get<ShareInfo>(base + '/api/info');
       if (info.unlocked && info.kind === 'upload' && !uploader) {
         uploader = new Uploader('/_upload/', { 'X-Share-Token': token });
+        if (info.r2_threshold !== undefined)
+          uploader.r2 = { base: '/_r2/', threshold: info.r2_threshold };
         // What the link still accepts changes with every file it takes.
         uploader.onFileDone(() => void loadInfo());
       }

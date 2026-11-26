@@ -125,6 +125,50 @@ Recommended Cloudflare settings: a WAF rate-limit rule on `/api/auth/login`,
 `/s/*/api/unlock` and `/api/auth/invite*`; a Cache Rule that bypasses caching
 for both hostnames.
 
+### Large uploads through R2 (optional)
+
+Cloudflare limits a request to 100 MB, so behind the tunnel a large upload is
+many requests, all of which pass through it. With an R2 bucket configured, a
+file from `threshold` up (1 GiB by default) instead goes from the browser
+straight to the bucket, and the server fetches it from there and deletes it:
+the bucket only ever holds uploads in transit. It applies to signed-in users,
+API tokens and drop links alike; without the `[r2]` section nothing changes.
+
+1. Create a bucket (say `filebrowser-ingest`), used for nothing else.
+2. Give it a CORS policy that lets the two origins PUT:
+
+   ```json
+   [{ "AllowedOrigins": ["https://files.example.com", "https://share.example.com"],
+      "AllowedMethods": ["PUT"], "AllowedHeaders": ["*"], "MaxAgeSeconds": 3600 }]
+   ```
+
+3. Add two lifecycle rules as a backstop for what the server could not clean up
+   itself: delete objects after 7 days, and abort incomplete multipart uploads
+   after 7 days.
+4. Create an R2 API token with **Object Read & Write** on **that bucket only**,
+   and put its S3 credentials in the configuration:
+
+   ```toml
+   [r2]
+   endpoint = "https://<account id>.r2.cloudflarestorage.com"
+   bucket = "filebrowser-ingest"
+   access_key_id = "..."
+   # secret_access_key, or FB_R2_SECRET_ACCESS_KEY in /etc/filebrowser/env
+   # threshold = 1073741824          # files from this size go through the bucket
+   # part_size = 67108864            # 64 MiB
+   # max_pending_bytes = 214748364800 # what uploads in progress may hold there
+   ```
+
+The browser is never given those credentials: for each part of a file the
+server signs an address good for that upload, that part and that exact size,
+for 15 minutes. What a user or a drop link may upload is decided before
+anything is sent, as for other uploads. Each part fetched from the bucket is
+checked against the checksum the bucket holds for it; if the store's part
+ETags are not MD5 sums, the server log says the parts do not match and
+`verify_md5 = false` turns that check off (sizes are always checked).
+
+Any S3-compatible store works the same way (set `region` if it needs one).
+
 ## 2. Docker
 
 ```sh

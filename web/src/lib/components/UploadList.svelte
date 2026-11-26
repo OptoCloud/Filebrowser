@@ -20,11 +20,12 @@
           {:else if it.status === 'done'}✓ {it.storedName && it.storedName !== it.name
               ? `as ${it.storedName}`
               : formatSize(it.size)}
+          {:else if it.status === 'finishing'}finishing…
           {:else if it.status === 'queued'}queued
           {:else if it.status === 'cancelled'}cancelled
           {/if}
         </span>
-        {#if it.status === 'uploading' || it.status === 'queued'}
+        {#if it.status === 'uploading' || it.status === 'queued' || it.status === 'finishing'}
           <button
             class="icon"
             onclick={() => uploader.cancel(it.id)}

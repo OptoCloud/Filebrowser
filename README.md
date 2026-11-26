@@ -18,6 +18,8 @@ Licensed under the [GNU AGPL v3](LICENSE).
 
 - Password (argon2id) + TOTP login, OIDC (PKCE, state, nonce; accounts linked by
   issuer + subject), invite links, no public sign-up.
+- Large uploads can go from the browser straight to an R2 bucket and be pulled
+  from there, so they do not pass through a tunnel (see deploy/README.md).
 - Browse, search, upload (resumable tus), download with ranges, zip folders,
   rename/move/delete, trash with auto-purge.
 - Share links on a separate origin: expiry, password, download limits, revocation,

@@ -28,6 +28,8 @@ export interface OIDCIdentity {
 }
 
 export interface Me {
+  /** Set when the server has an upload bucket: files from this size go through it. */
+  r2_threshold?: number;
   user: User;
   grants: Grant[] | null;
   can_write: boolean;
@@ -276,4 +278,6 @@ export interface ShareInfo {
   note?: string;
   /** Drop links: uploaders give their name, and their files go under it. */
   ask_name?: boolean;
+  /** Set when the server has an upload bucket: files from this size go through it. */
+  r2_threshold?: number;
 }

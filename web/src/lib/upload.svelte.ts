@@ -1,4 +1,5 @@
 import * as tus from 'tus-js-client';
+import { R2Error, uploadViaR2 } from './r2upload.js';
 
 export interface PickedFile {
   file: File;
@@ -14,7 +15,8 @@ export interface UploadItem {
   dir: string;
   size: number;
   sent: number;
-  status: 'queued' | 'uploading' | 'done' | 'error' | 'cancelled';
+  /** finishing: sent to the upload bucket, the server is fetching it from there. */
+  status: 'queued' | 'uploading' | 'finishing' | 'done' | 'error' | 'cancelled';
   error?: string;
   storedName?: string;
 }
@@ -38,7 +40,8 @@ export function forgetUploads() {
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k?.startsWith(`tus::${FINGERPRINT}|`)) localStorage.removeItem(k);
+      if (k?.startsWith(`tus::${FINGERPRINT}|`) || k?.startsWith('fbr2|'))
+        localStorage.removeItem(k);
     }
   } catch {
     /* storage unavailable */
@@ -93,6 +96,13 @@ export class Uploader {
   private headers: Record<string, string>;
   /** Further tus metadata sent with every upload, read when one starts. */
   extra: Record<string, string> = {};
+  /**
+   * Set when the server has an upload bucket: files of at least `threshold`
+   * bytes go through it (see r2upload.ts) instead of tus.
+   */
+  r2: { base: string; threshold: number } | null = null;
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private aborters = new Map<number, AbortController>();
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private doneListeners = new Set<(item: UploadItem) => void>();
 
@@ -102,7 +112,9 @@ export class Uploader {
   }
 
   get busy(): boolean {
-    return this.items.some((i) => i.status === 'queued' || i.status === 'uploading');
+    return this.items.some(
+      (i) => i.status === 'queued' || i.status === 'uploading' || i.status === 'finishing'
+    );
   }
 
   /** Number of tus uploads currently started and not yet finished. */
@@ -155,6 +167,10 @@ export class Uploader {
       this.pump();
     };
     this.finishers.set(item.id, finish);
+    if (this.r2 && file.size > 0 && file.size >= this.r2.threshold) {
+      void this.startR2(item, file, dir, this.r2.base, () => finished, finish);
+      return;
+    }
     const upload = new tus.Upload(file, {
       endpoint: this.endpoint,
       chunkSize: CHUNK,
@@ -223,11 +239,72 @@ export class Uploader {
       });
   }
 
+  /** Sends a file through the upload bucket; the counterpart of the tus path in start. */
+  private async startR2(
+    item: UploadItem,
+    file: File,
+    dir: string,
+    base: string,
+    isFinished: () => boolean,
+    finish: () => void
+  ) {
+    const ctrl = new AbortController();
+    this.aborters.set(item.id, ctrl);
+    try {
+      const name = await uploadViaR2({
+        base,
+        headers: this.headers,
+        file,
+        dir,
+        relativePath: item.relativePath,
+        uploader: this.extra.uploader,
+        resumeKey: [
+          'fbr2',
+          base,
+          await digest(this.headers['X-Share-Token'] ?? ''),
+          dir,
+          this.extra.uploader ?? '',
+          item.relativePath,
+          file.size,
+          file.lastModified,
+        ].join('|'),
+        signal: ctrl.signal,
+        onProgress: (sent) => {
+          item.sent = sent;
+        },
+        onFinishing: () => {
+          if (!isFinished()) item.status = 'finishing';
+        },
+      });
+      if (isFinished()) return;
+      item.status = 'done';
+      item.sent = item.size;
+      item.storedName = name;
+      finish();
+      for (const fn of this.doneListeners) fn(item);
+    } catch (e) {
+      if (isFinished()) return; // cancelled
+      item.status = 'error';
+      item.error = e instanceof Error ? e.message : String(e);
+      // An answer that says no will say so again; anything else may pass.
+      if (!(e instanceof R2Error) || e.status === 0 || e.status >= 500 || e.status === 429)
+        this.retryable.set(item.id, { file, dir });
+      finish();
+    } finally {
+      this.aborters.delete(item.id);
+    }
+  }
+
   cancel(id: number) {
     const item = this.items.find((i) => i.id === id);
-    if (!item || (item.status !== 'queued' && item.status !== 'uploading')) return;
-    const wasActive = item.status === 'uploading';
+    if (
+      !item ||
+      (item.status !== 'queued' && item.status !== 'uploading' && item.status !== 'finishing')
+    )
+      return;
+    const wasActive = item.status !== 'queued';
     item.status = 'cancelled';
+    this.aborters.get(id)?.abort(new DOMException('cancelled', 'AbortError'));
     const up = this.uploads.get(id);
     if (up) {
       up.abort(true).catch(() => {});
@@ -261,7 +338,9 @@ export class Uploader {
   }
 
   clearFinished() {
-    this.items = this.items.filter((i) => i.status === 'queued' || i.status === 'uploading');
+    this.items = this.items.filter(
+      (i) => i.status === 'queued' || i.status === 'uploading' || i.status === 'finishing'
+    );
     this.retryable.clear();
   }
 }
