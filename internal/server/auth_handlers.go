@@ -324,10 +324,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"mfa_enabled":    id.User.TOTPEnabled() || len(keys) > 0,
 		"totp_required":  requiresTOTP(id),
 		"restricted":     s.isRestricted(id),
-		"has_password":   id.User.PasswordHash != "",
-		"oidc":           idents,
-		"providers":      s.oidc.Providers(),
-		"share_origin":   s.cfg.ShareOrigin,
+		// The password was chosen by someone else: nothing else works until it is replaced.
+		"must_change_password": id.User.MustChangePassword,
+		"has_password":         id.User.PasswordHash != "",
+		"oidc":                 idents,
+		"providers":            s.oidc.Providers(),
+		"share_origin":         s.cfg.ShareOrigin,
 	}
 	if s.r2 != nil {
 		// Files from this size go through the upload bucket.
@@ -526,7 +528,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		httpx.InternalError(w, r, err)
 		return
 	}
-	if err := s.store.SetPassword(ctx, id.User.ID, hash); err != nil {
+	if err := s.store.SetPassword(ctx, id.User.ID, hash, false); err != nil {
 		httpx.InternalError(w, r, err)
 		return
 	}

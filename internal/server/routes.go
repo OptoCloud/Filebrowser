@@ -34,7 +34,7 @@ func (s *Server) routes() {
 	// Account.
 	s.handle("POST /api/auth/logout-all", s.handleLogoutAll)
 	s.handle("POST /api/auth/totp/disable", s.handleTOTPDisable)
-	s.handle("POST /api/me/password", s.handleChangePassword)
+	s.handle("POST /api/me/password", s.handleChangePassword, passwordChange())
 	s.handle("GET /api/me/sessions", s.handleMySessions)
 	s.handle("DELETE /api/me/sessions/{id}", s.handleDeleteMySession)
 	s.handle("POST /api/me/oidc/link", s.handleOIDCLink)

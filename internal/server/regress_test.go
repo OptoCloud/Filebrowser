@@ -861,3 +861,35 @@ func TestSecurityTxtAndPolicyReports(t *testing.T) {
 		t.Errorf("report-only CSP = %q", ro)
 	}
 }
+
+// An account whose password an administrator chose can do nothing but
+// replace it.
+func TestMustChangePassword(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("root", "admin")
+	os.MkdirAll(filepath.Join(h.root, "tess"), 0o755)
+	a := h.session(admin, time.Minute)
+	rec := a.do("POST", "/api/admin/users", map[string]any{"username": "tess", "password": "first-password-from-admin", "role": "user",
+		"grants": []map[string]string{{"path": "tess", "permission": "read"}}})
+	expect(t, rec, 200)
+	c := h.app()
+	expect(t, c.do("POST", "/api/auth/login", map[string]string{"username": "tess", "password": "first-password-from-admin"}), 200)
+	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["must_change_password"] != true {
+		t.Fatalf("me = %v", me)
+	}
+	for _, p := range []string{"/api/files?path=tess", "/api/shares", "/api/me/sessions", "/api/me/tokens"} {
+		if rec := c.do("GET", p, nil); rec.Code != 403 || !strings.Contains(rec.Body.String(), "password_change_required") {
+			t.Errorf("GET %s: %d %s", p, rec.Code, rec.Body.String())
+		}
+	}
+	expect(t, c.do("POST", "/api/me/password", map[string]string{"current": "first-password-from-admin", "new": "a password of my own choosing"}), 200)
+	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["must_change_password"] != false {
+		t.Fatalf("after the change: %v", me)
+	}
+	expect(t, c.do("GET", "/api/files?path=tess", nil), 200)
+	// An invited user chose their own password: nothing to change.
+	u := h.user("uma", "user", store.Grant{Path: "uma", Permission: "read"})
+	if u.MustChangePassword {
+		t.Fatal("a user made without an administrator's password must change it")
+	}
+}

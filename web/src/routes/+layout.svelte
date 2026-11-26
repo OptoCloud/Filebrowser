@@ -57,7 +57,7 @@
       <Icon name="menu" />
     </button>
     <div class="links" id="main-menu" class:open={menuOpen}>
-      {#if !me.restricted}
+      {#if !me.restricted && !me.must_change_password}
         <a href={filesHref('')} class:active={active('/files')} onclick={() => (menuOpen = false)}>
           Files
         </a>

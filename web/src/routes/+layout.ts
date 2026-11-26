@@ -22,6 +22,9 @@ export const load: LayoutLoad = async ({ url, fetch, depends }) => {
       res.status === 429 ? 'Too many requests, try again shortly.' : 'Could not load your account.'
     );
   const me = (await res.json()) as Me;
-  if (me.restricted && p !== '/settings/2fa') redirect(307, '/settings/2fa');
+  // A password someone else chose is replaced before anything else.
+  if (me.must_change_password && p !== '/settings') redirect(307, '/settings');
+  if (me.restricted && !me.must_change_password && p !== '/settings/2fa')
+    redirect(307, '/settings/2fa');
   return { me: me as Me | null };
 };

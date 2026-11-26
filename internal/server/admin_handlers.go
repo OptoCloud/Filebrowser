@@ -109,7 +109,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid grants")
 		return
 	}
-	hash := ""
+	hash, mustChange := "", false
 	if req.Password != "" {
 		if err := s.passwords.Check(r.Context(), req.Password, req.Username); err != nil {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
@@ -120,6 +120,7 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 			httpx.InternalError(w, r, err)
 			return
 		}
+		mustChange = true // the administrator knows this password
 	}
 	ctx := r.Context()
 	u, err := s.store.CreateUser(ctx, req.Username, hash, req.Role, req.QuotaBytes)
@@ -133,6 +134,13 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SetGrants(ctx, u.ID, grants); err != nil {
 		httpx.InternalError(w, r, err)
 		return
+	}
+	if mustChange {
+		if err := s.store.SetPassword(ctx, u.ID, hash, true); err != nil {
+			httpx.InternalError(w, r, err)
+			return
+		}
+		u.MustChangePassword = true
 	}
 	if req.MFAExempt {
 		if err := s.store.UpdateUser(ctx, u.ID, store.UserUpdate{MFAExempt: &req.MFAExempt}); err != nil {

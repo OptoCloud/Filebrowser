@@ -107,15 +107,19 @@ type routeSpec struct {
 	level           Level
 	allowRestricted bool
 	noBodyLimit     bool
+	// passwordChange marks what a user who must first replace a password
+	// chosen for them may still do (see User.MustChangePassword).
+	passwordChange bool
 	// tokenCap is the capability an API token needs to use the route; with
 	// none, the route does not take API tokens at all.
 	tokenCap string
 }
 
-func public() routeOpt      { return func(r *routeSpec) { r.level = Public } }
-func adminOnly() routeOpt   { return func(r *routeSpec) { r.level = Admin } }
-func restricted() routeOpt  { return func(r *routeSpec) { r.allowRestricted = true } }
-func noBodyLimit() routeOpt { return func(r *routeSpec) { r.noBodyLimit = true } }
+func public() routeOpt         { return func(r *routeSpec) { r.level = Public } }
+func adminOnly() routeOpt      { return func(r *routeSpec) { r.level = Admin } }
+func restricted() routeOpt     { return func(r *routeSpec) { r.allowRestricted = true } }
+func passwordChange() routeOpt { return func(r *routeSpec) { r.passwordChange = true } }
+func noBodyLimit() routeOpt    { return func(r *routeSpec) { r.noBodyLimit = true } }
 
 const maxBody = 1 << 20
 
@@ -226,6 +230,10 @@ func (s *Server) guard(spec routeSpec, h http.Handler) http.Handler {
 		}
 		id, ok := s.authenticate(w, r)
 		if !ok {
+			return
+		}
+		if id.User.MustChangePassword && !spec.allowRestricted && !spec.passwordChange {
+			httpx.ErrorCode(w, http.StatusForbidden, "password_change_required", "choose a new password first")
 			return
 		}
 		if s.isRestricted(id) && !spec.allowRestricted {

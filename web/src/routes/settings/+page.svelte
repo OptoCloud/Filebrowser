@@ -134,6 +134,11 @@
     <h1>Settings</h1>
     {#if notice}<div class="notice">{notice}</div>{/if}
     {#if pageErr}<div class="error" role="alert">{pageErr}</div>{/if}
+    {#if me.must_change_password}
+      <div class="notice" role="status">
+        Your password was set by an administrator. Choose a new one to continue.
+      </div>
+    {/if}
 
     <div class="card">
       <h2 class="first">Account</h2>
@@ -261,7 +266,7 @@
       </div>
     {/if}
 
-    {#if !me.restricted}
+    {#if !me.restricted && !me.must_change_password}
       <TokensCard />
       <WebhooksCard admin={me.user.role === 'admin'} />
     {/if}

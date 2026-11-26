@@ -21,6 +21,9 @@ type User struct {
 	Disabled     bool      `json:"disabled"`
 	// MFAExempt lifts the two-factor requirement for a non-admin writer.
 	MFAExempt bool `json:"mfa_exempt"`
+	// MustChangePassword: the password was chosen by someone else, and the
+	// user must replace it before doing anything else.
+	MustChangePassword bool `json:"must_change_password"`
 }
 
 func (u *User) IsAdmin() bool     { return u.Role == "admin" }
@@ -31,12 +34,12 @@ type Grant struct {
 	Permission string `json:"permission"` // read or write
 }
 
-const userCols = `id, username, password_hash, role, quota_bytes, totp_secret, totp_pending, totp_last_step, created_at, disabled, mfa_exempt`
+const userCols = `id, username, password_hash, role, quota_bytes, totp_secret, totp_pending, totp_last_step, created_at, disabled, mfa_exempt, must_change_password`
 
 func scanUser(row pgx.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.QuotaBytes,
-		&u.TOTPSecret, &u.TOTPPending, &u.TOTPLastStep, &u.CreatedAt, &u.Disabled, &u.MFAExempt)
+		&u.TOTPSecret, &u.TOTPPending, &u.TOTPLastStep, &u.CreatedAt, &u.Disabled, &u.MFAExempt, &u.MustChangePassword)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -100,8 +103,11 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, up UserUpdate) error {
 		WHERE id = $1`, id, up.Role, up.QuotaBytes, up.Disabled, up.MFAExempt))
 }
 
-func (s *Store) SetPassword(ctx context.Context, id int64, hash string) error {
-	return affected(s.pool.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, id, hash))
+// SetPassword stores a new password hash. mustChange says the password was
+// chosen for the user, who has to replace it at the next login.
+func (s *Store) SetPassword(ctx context.Context, id int64, hash string, mustChange bool) error {
+	return affected(s.pool.Exec(ctx, `UPDATE users SET password_hash = $2, must_change_password = $3 WHERE id = $1`,
+		id, hash, mustChange))
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {

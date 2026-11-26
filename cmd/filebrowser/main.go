@@ -341,6 +341,7 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 	case "reset-password":
 		fs := flag.NewFlagSet("user reset-password", flag.ExitOnError)
 		stdin := fs.Bool("password-stdin", false, "read the password from stdin")
+		mustChange := fs.Bool("must-change", false, "make the user choose a new password at the next login")
 		name, err := positional(fs, rest)
 		if err != nil {
 			return err
@@ -360,7 +361,7 @@ func userCmd(ctx context.Context, cfg config.Config, st *store.Store, args []str
 		if err != nil {
 			return err
 		}
-		if err := st.SetPassword(ctx, u.ID, hash); err != nil {
+		if err := st.SetPassword(ctx, u.ID, hash, *mustChange); err != nil {
 			return err
 		}
 		n, _ := st.DeleteUserSessions(ctx, u.ID, nil)

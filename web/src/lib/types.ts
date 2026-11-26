@@ -28,6 +28,8 @@ export interface OIDCIdentity {
 }
 
 export interface Me {
+  /** The password was chosen by someone else and must be replaced first. */
+  must_change_password?: boolean;
   /** Set when the server has an upload bucket: files from this size go through it. */
   r2_threshold?: number;
   user: User;

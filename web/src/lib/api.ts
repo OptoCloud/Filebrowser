@@ -53,6 +53,10 @@ export function handleAuthError(err: unknown): boolean {
     }
     return true;
   }
+  if (err.status === 403 && err.code === 'password_change_required') {
+    if (location.pathname !== '/settings') void goto(resolve('/settings'));
+    return true;
+  }
   if (err.status === 403 && err.code === 'totp_enrollment_required') {
     if (location.pathname !== '/settings/2fa') void goto(resolve('/settings/2fa'));
     return true;
