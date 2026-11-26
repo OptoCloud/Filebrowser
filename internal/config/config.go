@@ -58,6 +58,11 @@ type Config struct {
 	// the pages and in the previews chat apps show for its links.
 	SiteName   string `toml:"site_name"`
 	ThemeColor string `toml:"theme_color"`
+	// MetricsListen is an address (e.g. "127.0.0.1:9101") on which the
+	// server's counters are served at /metrics in the Prometheus format,
+	// without authentication: keep it off the internet. Unset, they are not
+	// served.
+	MetricsListen string `toml:"metrics_listen"`
 	// CheckPwnedPasswords asks the Pwned Passwords service whether a new
 	// password is in a known breach; five hex digits of its SHA-1 are sent.
 	CheckPwnedPasswords bool `toml:"check_pwned_passwords"`

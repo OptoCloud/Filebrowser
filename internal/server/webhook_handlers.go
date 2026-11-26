@@ -26,8 +26,36 @@ var hookEvents = map[string]string{
 // notifyHooks passes an audited event on to the webhooks of the user it is
 // about (for a share, its owner).
 func (s *Server) notifyHooks(ctx context.Context, userID *int64, action, target string, details any) {
+	s.count(action, details)
 	if event, ok := hookEvents[action]; ok && userID != nil {
 		s.hooks.Emit(ctx, *userID, event, target, details)
+	}
+}
+
+// count keeps the counters that follow from audited events.
+func (s *Server) count(action string, details any) {
+	d, _ := details.(map[string]any)
+	switch action {
+	case audit.FileUpload, audit.ShareUpload:
+		via := "app"
+		if action == audit.ShareUpload {
+			via = "drop"
+		}
+		s.Metrics.Add(1, "filebrowser_uploads_total", "via", via)
+		switch n := d["size"].(type) {
+		case int64:
+			s.Metrics.Add(n, "filebrowser_upload_bytes_total", "via", via)
+		case int:
+			s.Metrics.Add(int64(n), "filebrowser_upload_bytes_total", "via", via)
+		}
+	case audit.LoginOK, audit.OIDCLogin:
+		s.Metrics.Add(1, "filebrowser_logins_total", "result", "ok")
+	case audit.LoginFailed, audit.TOTPFailed, audit.WebAuthnFailed, audit.OIDCDenied:
+		s.Metrics.Add(1, "filebrowser_logins_total", "result", "failed")
+	case audit.ShareAccess:
+		s.Metrics.Add(1, "filebrowser_share_downloads_total")
+	case audit.ShareCreated:
+		s.Metrics.Add(1, "filebrowser_shares_created_total")
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"filebrowser/internal/files"
 	"filebrowser/internal/httpx"
 	"filebrowser/internal/media"
+	"filebrowser/internal/metrics"
 	"filebrowser/internal/r2"
 	"filebrowser/internal/shares"
 	"filebrowser/internal/store"
@@ -67,6 +68,8 @@ type Server struct {
 	reportLimiter *auth.RateLimiter
 	hooks         *webhooks.Dispatcher
 	passwords     *auth.PasswordPolicy
+	// Metrics counts what the server does (see MetricsListen).
+	Metrics *metrics.Registry
 	// r2 is the upload bucket, or nil when none is configured.
 	r2           *uploads.R2
 	inviteLimit  *auth.RateLimiter
@@ -195,6 +198,14 @@ func New(d Deps) (*Server, error) {
 	}
 	s.static.shareCard = s.shareCard
 	s.passwords = &auth.PasswordPolicy{Pwned: cfg.CheckPwnedPasswords}
+	s.Metrics = &metrics.Registry{}
+	s.Metrics.Describe("filebrowser_http_requests_total", "Requests answered, by origin and status class.")
+	s.Metrics.Describe("filebrowser_http_response_bytes_total", "Bytes sent in responses.")
+	s.Metrics.Describe("filebrowser_uploads_total", "Files received, by the app (also API tokens) or through drop links.")
+	s.Metrics.Describe("filebrowser_upload_bytes_total", "Bytes of the files received.")
+	s.Metrics.Describe("filebrowser_logins_total", "Logins and failed login attempts (any factor).")
+	s.Metrics.Describe("filebrowser_share_downloads_total", "Downloads counted through share links.")
+	s.Metrics.Describe("filebrowser_shares_created_total", "Share links made.")
 	s.hooks = webhooks.New(d.Store, d.Keys)
 	s.audit.Notify = s.notifyHooks
 	s.routes()

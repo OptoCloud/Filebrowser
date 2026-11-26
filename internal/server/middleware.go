@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"filebrowser/internal/httpx"
@@ -46,6 +48,12 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(sw, r)
+		origin := "app"
+		if strings.EqualFold(r.Host, s.cfg.ShareHost()) {
+			origin = "share"
+		}
+		s.Metrics.Add(1, "filebrowser_http_requests_total", "origin", origin, "status", strconv.Itoa(sw.status/100)+"xx")
+		s.Metrics.Add(sw.bytes, "filebrowser_http_response_bytes_total", "origin", origin)
 		slog.Info("request", "method", r.Method, "host", r.Host, "path", httpx.RedactPath(r.URL.Path),
 			"status", sw.status, "bytes", sw.bytes, "ms", time.Since(start).Milliseconds(), "ip", httpx.IP(r.Context()))
 	})

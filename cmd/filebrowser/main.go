@@ -197,7 +197,16 @@ func serve(ctx context.Context, cfg config.Config, st *store.Store) error {
 		MaxHeaderBytes:    64 << 10,
 		// No overall read/write timeouts: uploads and media streams are long-lived.
 	}
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
+	if cfg.MetricsListen != "" {
+		ms := &http.Server{Addr: cfg.MetricsListen, Handler: srv.Metrics.Handler(version),
+			ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second}
+		go func() {
+			slog.Info("metrics", "addr", cfg.MetricsListen)
+			errc <- ms.ListenAndServe()
+		}()
+		defer ms.Close()
+	}
 	go func() {
 		slog.Info("listening", "addr", cfg.Listen, "app", cfg.AppOrigin, "share", cfg.ShareOrigin)
 		errc <- hs.ListenAndServe()
