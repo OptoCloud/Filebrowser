@@ -45,19 +45,25 @@ type Uploads struct {
 	audit   *audit.Logger
 	store   rootStore
 	maxSize int64
-	// failedLookup rate-limits invalid share tokens per client IP.
+	// failedLookup rate-limits invalid share tokens per client IP, and
+	// allowDrop the uploads a client starts through drop links.
 	failedLookup func(ip string) bool
+	allowDrop    func(ip string) bool
 
 	App   http.Handler
 	Share http.Handler
 }
 
+// dropStale is how long an upload through a drop link may stand still.
+const dropStale = 2 * time.Hour
+
 type shareCtxKey struct{}
 
-// failedLookup is called for each invalid share token; returning false
-// answers 429 instead of 404.
-func New(fsvc *files.Service, sh *shares.Service, al *audit.Logger, appOrigin, shareOrigin string, maxSize int64, failedLookup func(ip string) bool) (*Uploads, error) {
-	u := &Uploads{files: fsvc, shares: sh, audit: al, maxSize: maxSize, failedLookup: failedLookup}
+// failedLookup is called for each invalid share token, and allowDrop for each
+// upload started through a drop link; returning false answers 429.
+func New(fsvc *files.Service, sh *shares.Service, al *audit.Logger, appOrigin, shareOrigin string, maxSize int64,
+	failedLookup, allowDrop func(ip string) bool) (*Uploads, error) {
+	u := &Uploads{files: fsvc, shares: sh, audit: al, maxSize: maxSize, failedLookup: failedLookup, allowDrop: allowDrop}
 	u.store = rootStore{fs: fsvc.FS}
 	u.restoreReservations()
 	// One process serves all uploads, so in-memory locks suffice.
@@ -82,7 +88,7 @@ func New(fsvc *files.Service, sh *shares.Service, al *audit.Logger, appOrigin, s
 				return finish(ev)
 			},
 			PreUploadTerminateCallback: func(ev tushandler.HookEvent) (tushandler.HTTPResponse, error) {
-				fsvc.Release(ev.Upload.ID)
+				u.release(ev.Context, ev.Upload)
 				return tushandler.HTTPResponse{}, nil
 			},
 			// tusd logs every request at info level; keep only warnings.
@@ -184,23 +190,55 @@ func (u *Uploads) appFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse, e
 }
 
 func (u *Uploads) shareCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse, tushandler.FileInfoChanges, error) {
+	none := tushandler.FileInfoChanges{}
 	res, _ := ev.Context.Value(shareCtxKey{}).(*shares.Resolved)
 	if res == nil || res.Share.Kind != "upload" {
-		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, reject(http.StatusForbidden, "forbidden")
+		return tushandler.HTTPResponse{}, none, reject(http.StatusForbidden, "forbidden")
 	}
 	dir, name, err := target(res.Root, ev.Upload.MetaData)
 	if err != nil {
-		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
+		return tushandler.HTTPResponse{}, none, err
 	}
 	dir, err = u.files.FS.Authorize(res.Access, dir, files.PermWrite)
 	if err != nil || !files.Within(dir, res.Root) {
-		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, reject(http.StatusForbidden, "forbidden")
+		return tushandler.HTTPResponse{}, none, reject(http.StatusForbidden, "forbidden")
+	}
+	lim := u.shares.Limits(res.Share)
+	if lim.FileBytes > 0 && ev.Upload.Size > lim.FileBytes {
+		return tushandler.HTTPResponse{}, none, reject(http.StatusRequestEntityTooLarge, "this file is larger than the link accepts")
+	}
+	// By name for now, so that a file of the wrong kind is refused before
+	// it is sent; shareFinish looks at what was received.
+	if t := files.MimeType(name); t != "application/octet-stream" && !lim.Allows(t) {
+		return tushandler.HTTPResponse{}, none, reject(http.StatusUnsupportedMediaType, "this link does not accept this kind of file")
 	}
 	uploadID, err := u.reserve(ev, res.Access, res.Owner.ID, res.Owner.QuotaBytes)
 	if err != nil {
-		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
+		return tushandler.HTTPResponse{}, none, err
+	}
+	ok, err := u.shares.Store.ReserveShareUpload(ev.Context, res.Share.ID, ev.Upload.Size, lim.Bytes, lim.Files)
+	if err != nil || !ok {
+		u.files.Release(uploadID)
+		if err != nil {
+			slog.Error("reserve drop upload", "share", res.Share.ID, "err", err)
+			return tushandler.HTTPResponse{}, none, reject(http.StatusInternalServerError, "internal error")
+		}
+		return tushandler.HTTPResponse{}, none, reject(http.StatusRequestEntityTooLarge, "this link has reached its upload limit")
 	}
 	return tushandler.HTTPResponse{}, u.changes(uploadID, "s:"+strconv.FormatInt(res.Share.ID, 10), res.Owner.ID, dir, name), nil
+}
+
+// release gives back what an upload that will not be finished had reserved:
+// its owner's quota and, through a drop link, the link's allowance.
+func (u *Uploads) release(ctx context.Context, info tushandler.FileInfo) {
+	u.files.Release(info.ID)
+	if v, ok := strings.CutPrefix(fact(info, storageOwner, legacyOwner), "s:"); ok {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			if err := u.shares.Store.ReleaseShareUpload(context.WithoutCancel(ctx), id, info.Size); err != nil {
+				slog.Error("release drop upload", "share", id, "err", err)
+			}
+		}
+	}
 }
 
 // changes records the upload's owner and destination, and stages its data on
@@ -220,6 +258,14 @@ func (u *Uploads) shareFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 	if res == nil {
 		return tushandler.HTTPResponse{}, reject(http.StatusForbidden, "forbidden")
 	}
+	// What the file is, by its content: the name is the uploader's word.
+	if lim := u.shares.Limits(res.Share); len(lim.Types) > 0 {
+		t, err := u.verify(ev.Upload)
+		if err != nil || !lim.Allows(t.Mime) {
+			u.discard(ev.Context, ev.Upload)
+			return tushandler.HTTPResponse{}, reject(http.StatusUnsupportedMediaType, "this link does not accept this kind of file")
+		}
+	}
 	final, err := u.place(ev, res.Access, res.Root)
 	if err != nil {
 		return tushandler.HTTPResponse{}, err
@@ -229,6 +275,24 @@ func (u *Uploads) shareFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 		map[string]any{"share_id": res.Share.ID, "size": ev.Upload.Size})
 	// Uploaders to a drop link learn only the stored file name, not the path.
 	return tushandler.HTTPResponse{Header: tushandler.HTTPHeader{"X-Fb-Name": files.Base(final)}}, nil
+}
+
+// verify types a received upload by its content.
+func (u *Uploads) verify(info tushandler.FileInfo) (files.Type, error) {
+	f, err := u.files.FS.Root().Open(binPath(info))
+	if err != nil {
+		return files.Type{}, err
+	}
+	defer f.Close()
+	return files.VerifyFile(fact(info, storageName, legacyName), f, info.Size)
+}
+
+// discard removes a received upload that is refused, with its reservations.
+func (u *Uploads) discard(ctx context.Context, info tushandler.FileInfo) {
+	root := u.files.FS.Root()
+	_ = root.Remove(binPath(info))
+	_ = root.Remove(infoPath(info.ID))
+	u.release(ctx, info)
 }
 
 // place moves a completed upload to its destination, re-checking permissions.
@@ -336,6 +400,18 @@ func (u *Uploads) withShare(next http.Handler) http.Handler {
 			httpx.Error(w, http.StatusUnauthorized, "password required")
 			return
 		}
+		if ok, err := u.shares.Session(r.Context(), nil, r, res.Share); err != nil {
+			httpx.InternalError(w, r, err)
+			return
+		} else if !ok {
+			httpx.ErrorCode(w, http.StatusForbidden, "in_use", "this link is in use in another browser")
+			return
+		}
+		if r.Method == http.MethodPost && u.allowDrop != nil && !u.allowDrop(httpx.LimitKey(r.Context())) {
+			w.Header().Set("Retry-After", "60")
+			httpx.Error(w, http.StatusTooManyRequests, "too many uploads, try again later")
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), shareCtxKey{}, res)))
 	})
 }
@@ -401,6 +477,9 @@ func (u *Uploads) Cleanup(maxAge time.Duration) {
 		fi, err := root.Stat(p)
 		return err != nil || fi.ModTime().Before(cutoff)
 	}
+	// A drop link's uploads hold its owner's quota on a stranger's word, so
+	// one that has stood still goes sooner.
+	dropCutoff := time.Now().Add(-min(maxAge, dropStale))
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasSuffix(name, ".lock") { // left by the file locker used before
@@ -408,17 +487,25 @@ func (u *Uploads) Cleanup(maxAge time.Duration) {
 			continue
 		}
 		id, ok := strings.CutSuffix(name, ".info")
-		if !ok || !stale(infoPath(id)) {
+		if !ok {
 			continue
 		}
 		up, err := u.store.GetUpload(context.Background(), id)
 		if err == nil {
 			ru := up.(*rootUpload)
-			if !stale(ru.binPath()) {
+			fresh := !stale(ru.binPath())
+			if fi, err := root.Stat(ru.binPath()); err == nil && fi.ModTime().Before(dropCutoff) &&
+				strings.HasPrefix(fact(ru.info, storageOwner, legacyOwner), "s:") {
+				fresh = false
+			}
+			if fresh {
 				continue // still being written
 			}
 			_ = ru.Terminate(context.Background())
-			u.files.Release(id)
+			u.release(context.Background(), ru.info)
+			continue
+		}
+		if !stale(infoPath(id)) {
 			continue
 		}
 		// Unreadable info, or from the previous storage backend.

@@ -57,6 +57,7 @@ type Server struct {
 	// shareBackoff limits password guesses per share across all clients.
 	shareBackoff *auth.Backoff
 	shareLimiter *auth.RateLimiter
+	dropLimiter  *auth.RateLimiter
 	inviteLimit  *auth.RateLimiter
 	passkeyLimit *auth.RateLimiter
 	// ceremonyLimit caps the security-key ceremonies one user can start: they
@@ -119,13 +120,17 @@ func New(d Deps) (*Server, error) {
 		shares: &shares.Service{
 			Store: d.Store, Keys: d.Keys, Files: d.Files, Secure: secure, ShareOrigin: cfg.ShareOrigin,
 			DefaultExpiry: cfg.Shares.DefaultExpiry.Duration, MaxExpiry: cfg.Shares.MaxExpiry.Duration,
+			DropMaxBytes: cfg.Shares.DropMaxBytes, DropMaxFiles: cfg.Shares.DropMaxFiles, UploadMaxSize: cfg.Uploads.MaxSize,
 		},
 		loginBackoff:   auth.NewBackoff(5, time.Second, 15*time.Minute, time.Hour),
 		accountBackoff: auth.NewBackoff(20, time.Second, 30*time.Second, time.Hour),
 		totpBackoff:    auth.NewBackoff(5, 2*time.Second, 15*time.Minute, time.Hour),
 		shareBackoff:   auth.NewBackoff(10, time.Second, time.Minute, time.Hour),
 		// Share token lookups: 60/min per IP with a burst of 120.
-		shareLimiter:  auth.NewRateLimiter(60, 120),
+		shareLimiter: auth.NewRateLimiter(60, 120),
+		// Uploads started through drop links, per IP: a folder of small
+		// files is many in a short time.
+		dropLimiter:   auth.NewRateLimiter(600, 1200),
 		inviteLimit:   auth.NewRateLimiter(10, 20),
 		passkeyLimit:  auth.NewRateLimiter(30, 30),
 		ceremonyLimit: auth.NewRateLimiter(20, 20),
@@ -137,7 +142,8 @@ func New(d Deps) (*Server, error) {
 		s.shares.DefaultExpiry = s.shares.MaxExpiry
 	}
 	up, err := uploads.New(d.Files, s.shares, s.audit, cfg.AppOrigin, cfg.ShareOrigin, cfg.Uploads.MaxSize,
-		func(ip string) bool { return s.shareLimiter.Allow(ip, time.Now()) })
+		func(ip string) bool { return s.shareLimiter.Allow(ip, time.Now()) },
+		func(ip string) bool { return s.dropLimiter.Allow(ip, time.Now()) })
 	if err != nil {
 		return nil, err
 	}

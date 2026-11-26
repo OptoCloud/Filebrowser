@@ -505,7 +505,7 @@ func TestUploadReservationOutlivesRestart(t *testing.T) {
 	}
 	// A new process finds the upload on disk and reserves its bytes again.
 	fsvc := files.NewService(h.srv.files.FS, h.store)
-	if _, err := uploads.New(fsvc, h.srv.shares, h.srv.audit, appOrigin, shareOrigin, 1<<30, nil); err != nil {
+	if _, err := uploads.New(fsvc, h.srv.shares, h.srv.audit, appOrigin, shareOrigin, 1<<30, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	a, err := files.AccessFor(context.Background(), h.store, u)

@@ -123,6 +123,14 @@ export interface Share {
   active: boolean;
   has_password: boolean;
   owner?: string;
+  /** Drop links: limits (0 or empty is the server default) and what was accepted. */
+  max_bytes: number;
+  max_files: number;
+  max_file_bytes: number;
+  allowed_types: string[] | null;
+  single_session: boolean;
+  upload_bytes: number;
+  upload_files: number;
 }
 
 export interface Session {
@@ -219,4 +227,9 @@ export interface ShareInfo {
   size?: number;
   mime?: string;
   downloads_left?: number;
+  /** Drop links: what the link still accepts; -1 (or 0 for a size) is no limit. */
+  max_file_bytes?: number;
+  allowed_types?: string[] | null;
+  bytes_left?: number;
+  files_left?: number;
 }

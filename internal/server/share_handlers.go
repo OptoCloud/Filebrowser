@@ -79,7 +79,9 @@ func (s *Server) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit.Log(ctx, audit.ShareCreated, sh.Path, map[string]any{"share_id": sh.ID, "kind": sh.Kind,
-		"expires_at": sh.ExpiresAt, "password": sh.PasswordHash != "", "max_downloads": sh.MaxDownloads})
+		"expires_at": sh.ExpiresAt, "password": sh.PasswordHash != "", "max_downloads": sh.MaxDownloads,
+		"max_bytes": sh.MaxBytes, "max_files": sh.MaxFiles, "max_file_bytes": sh.MaxFileBytes,
+		"allowed_types": sh.AllowedTypes, "single_session": sh.SingleSession})
 	httpx.JSON(w, http.StatusOK, map[string]any{"share": viewShare(sh), "url": s.shares.URL(token)})
 }
 
@@ -166,6 +168,15 @@ func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"needs_password": true, "unlocked": false})
 		return
 	}
+	if sh.Kind == "upload" {
+		if ok, err := s.shares.Session(r.Context(), w, r, sh); err != nil {
+			httpx.InternalError(w, r, err)
+			return
+		} else if !ok {
+			httpx.ErrorCode(w, http.StatusForbidden, "in_use", "this link is in use in another browser")
+			return
+		}
+	}
 	info := map[string]any{
 		"name":           files.Base(sh.Path),
 		"kind":           sh.Kind,
@@ -182,6 +193,19 @@ func (s *Server) handleShareInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if sh.MaxDownloads > 0 {
 		info["downloads_left"] = max(sh.MaxDownloads-sh.DownloadCount, 0)
+	}
+	if sh.Kind == "upload" {
+		// What the link still accepts, so the page can say so before a
+		// file is sent; -1 is no limit.
+		lim := s.shares.Limits(sh)
+		info["max_file_bytes"], info["allowed_types"] = lim.FileBytes, lim.Types
+		info["bytes_left"], info["files_left"] = int64(-1), -1
+		if lim.Bytes > 0 {
+			info["bytes_left"] = max(lim.Bytes-sh.UploadBytes, 0)
+		}
+		if lim.Files > 0 {
+			info["files_left"] = max(lim.Files-sh.UploadFiles, 0)
+		}
 	}
 	httpx.JSON(w, http.StatusOK, info)
 }

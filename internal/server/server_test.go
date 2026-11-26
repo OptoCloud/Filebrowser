@@ -656,6 +656,89 @@ func TestDropShareUpload(t *testing.T) {
 	expect(t, rec, 404)
 }
 
+func TestDropShareLimits(t *testing.T) {
+	h := newHarness(t)
+	h.user("hana", "user", store.Grant{Path: "hana", Permission: "write"})
+	os.MkdirAll(filepath.Join(h.root, "hana", "inbox"), 0o755)
+	c := h.login("hana")
+	link := func(opts map[string]any) string {
+		t.Helper()
+		opts["path"], opts["kind"] = "hana/inbox", "upload"
+		rec := c.do("POST", "/api/shares", opts)
+		expect(t, rec, 200)
+		return strings.TrimPrefix(decode[map[string]any](t, rec)["url"].(string), shareOrigin+"/s/")
+	}
+	drop := func(token string) *client {
+		s := h.share()
+		s.headers["X-Share-Token"] = token
+		return s
+	}
+	png := "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + strings.Repeat("\x00", 20)
+
+	// Total bytes and file count, uploads in progress included.
+	token := link(map[string]any{"max_bytes": 10, "max_files": 2})
+	s := drop(token)
+	rec, _ := s.tusUpload("/_upload/", "", "a.bin", "123456")
+	expect(t, rec, 204)
+	rec, _ = s.tusUpload("/_upload/", "", "b.bin", "12345")
+	expect(t, rec, http.StatusRequestEntityTooLarge)
+	rec, loc := s.tusUpload("/_upload/", "", "b.bin", "1234")
+	expect(t, rec, 204)
+	rec, _ = s.tusUpload("/_upload/", "", "c.bin", "")
+	expect(t, rec, http.StatusRequestEntityTooLarge)
+	info := decode[map[string]any](t, s.do("GET", "/s/"+token+"/api/info", nil))
+	if info["bytes_left"] != float64(0) || info["files_left"] != float64(0) {
+		t.Fatalf("info = %v", info)
+	}
+	_ = loc
+
+	// A cancelled upload gives its allowance back.
+	token = link(map[string]any{"max_files": 1})
+	s = drop(token)
+	s.headers["Tus-Resumable"] = "1.0.0"
+	s.headers["Upload-Length"] = "5"
+	s.headers["Upload-Metadata"] = tusMeta("filename", "x.bin", "dir", "")
+	rec = s.do("POST", "/_upload/", []byte{})
+	expect(t, rec, 201)
+	delete(s.headers, "Upload-Length")
+	delete(s.headers, "Upload-Metadata")
+	u, _ := url.Parse(rec.Header().Get("Location"))
+	expect(t, s.do("DELETE", u.Path, nil), 204)
+	rec, _ = s.tusUpload("/_upload/", "", "x.bin", "12345")
+	expect(t, rec, 204)
+
+	// Size per file.
+	s = drop(link(map[string]any{"max_file_bytes": 4}))
+	rec, _ = s.tusUpload("/_upload/", "", "a.bin", "12345")
+	expect(t, rec, http.StatusRequestEntityTooLarge)
+
+	// Kinds of file: by name before anything is sent, by content after.
+	s = drop(link(map[string]any{"allowed_types": []string{"image"}}))
+	rec, _ = s.tusUpload("/_upload/", "", "notes.txt", "hello")
+	expect(t, rec, http.StatusUnsupportedMediaType)
+	rec, _ = s.tusUpload("/_upload/", "", "fake.png", "<script>alert(1)</script>")
+	expect(t, rec, http.StatusUnsupportedMediaType)
+	if _, err := os.Stat(filepath.Join(h.root, "hana", "inbox", "fake.png")); err == nil {
+		t.Fatal("a refused file was stored")
+	}
+	rec, _ = s.tusUpload("/_upload/", "", "real.png", png)
+	expect(t, rec, 204)
+	expect(t, c.do("POST", "/api/shares", map[string]any{"path": "hana/inbox", "kind": "upload", "allowed_types": []string{"exe"}}), 400)
+
+	// Single session: the first browser to open the link has it.
+	token = link(map[string]any{"single_session": true})
+	first, second := drop(token), drop(token)
+	rec, _ = first.tusUpload("/_upload/", "", "early.bin", "x")
+	expect(t, rec, 403) // not opened yet
+	expect(t, first.do("GET", "/s/"+token+"/api/info", nil), 200)
+	expect(t, second.do("GET", "/s/"+token+"/api/info", nil), 403)
+	rec, _ = second.tusUpload("/_upload/", "", "b.bin", "x")
+	expect(t, rec, 403)
+	rec, _ = first.tusUpload("/_upload/", "", "a.bin", "x")
+	expect(t, rec, 204)
+	expect(t, first.do("GET", "/s/"+token+"/api/info", nil), 200)
+}
+
 func TestAdminAndInvites(t *testing.T) {
 	h := newHarness(t)
 	h.user("root", "admin")

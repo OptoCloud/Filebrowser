@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { del, errorMessage, get, qs } from '#lib/api.js';
-  import { formatDate, parentPath } from '#lib/format.js';
+  import { formatDate, formatSize, parentPath } from '#lib/format.js';
   import { filesHref } from '#lib/nav.js';
   import { LatestRequest } from '#lib/latest.js';
   import type { Share } from '#lib/types.js';
@@ -90,7 +90,7 @@
             <th>Type</th>
             <th>Status</th>
             <th class="hide-mobile">Expires</th>
-            <th class="hide-mobile">Downloads</th>
+            <th class="hide-mobile">Used</th>
             <th></th>
           </tr>
         </thead>
@@ -111,7 +111,7 @@
               <td class="hide-mobile">
                 {s.kind === 'download'
                   ? `${s.download_count}${s.max_downloads ? ' / ' + s.max_downloads : ''}`
-                  : ''}
+                  : `${s.upload_files}${s.max_files ? ' / ' + s.max_files : ''} files, ${formatSize(s.upload_bytes)}`}
               </td>
               <td>
                 {#if !s.revoked_at}<button class="small danger" onclick={() => (revoking = s)}>

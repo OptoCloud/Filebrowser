@@ -60,3 +60,27 @@ func InlineSafe(t string, allowPDF bool) bool {
 func IsText(t string) bool {
 	return strings.HasPrefix(t, "text/") || t == "application/json" || t == "application/xml" || t == "application/x-subrip"
 }
+
+// Categories are the kinds of file a drop link can be limited to.
+var Categories = []string{"image", "video", "audio", "document", "archive"}
+
+// Category is the kind of file a media type is, one of Categories or
+// "other".
+func Category(mime string) string {
+	switch {
+	case strings.HasPrefix(mime, "image/"):
+		return "image"
+	case strings.HasPrefix(mime, "video/"):
+		return "video"
+	case strings.HasPrefix(mime, "audio/"):
+		return "audio"
+	case IsArchive(mime), mime == "application/x-xz", mime == "application/zstd":
+		return "archive"
+	case strings.HasPrefix(mime, "text/"), mime == "application/pdf", mime == "application/rtf", mime == "application/epub+zip",
+		mime == "application/msword", mime == "application/vnd.ms-excel", mime == "application/vnd.ms-powerpoint",
+		strings.HasPrefix(mime, "application/vnd.openxmlformats-officedocument."),
+		strings.HasPrefix(mime, "application/vnd.oasis.opendocument."):
+		return "document"
+	}
+	return "other"
+}

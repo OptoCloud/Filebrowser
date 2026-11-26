@@ -20,14 +20,27 @@ type Share struct {
 	RevokedAt     *time.Time `json:"revoked_at"`
 	// FileID identifies the shared file or folder (see files.FS.FileID).
 	FileID string `json:"-"`
+	// Limits of a drop link (0 or empty: the server default), and what it
+	// has accepted so far, uploads in progress included.
+	MaxBytes      int64    `json:"max_bytes"`
+	MaxFiles      int      `json:"max_files"`
+	MaxFileBytes  int64    `json:"max_file_bytes"`
+	AllowedTypes  []string `json:"allowed_types"`
+	SingleSession bool     `json:"single_session"`
+	SessionHash   []byte   `json:"-"`
+	UploadBytes   int64    `json:"upload_bytes"`
+	UploadFiles   int      `json:"upload_files"`
 }
 
-const shareCols = `id, token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, download_count, created_at, revoked_at, file_id`
+const shareCols = `id, token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, download_count, created_at, revoked_at, file_id,
+	max_bytes, max_files, max_file_bytes, allowed_types, single_session, session_hash, upload_bytes, upload_files`
 
 func (s *Store) CreateShare(ctx context.Context, sh *Share) error {
-	return s.pool.QueryRow(ctx, `INSERT INTO shares (token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, file_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+	return s.pool.QueryRow(ctx, `INSERT INTO shares (token_hash, owner_id, path, is_dir, kind, password_hash, expires_at, max_downloads, file_id,
+			max_bytes, max_files, max_file_bytes, allowed_types, single_session)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, created_at`,
 		sh.TokenHash, sh.OwnerID, sh.Path, sh.IsDir, sh.Kind, sh.PasswordHash, sh.ExpiresAt, sh.MaxDownloads, sh.FileID,
+		sh.MaxBytes, sh.MaxFiles, sh.MaxFileBytes, append([]string{}, sh.AllowedTypes...), sh.SingleSession,
 	).Scan(&sh.ID, &sh.CreatedAt)
 }
 
@@ -68,4 +81,33 @@ func (s *Store) CountShareDownload(ctx context.Context, id int64) (bool, error) 
 func (s *Store) DeleteSharesExpiredBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM shares WHERE expires_at < $1 OR revoked_at < $1`, cutoff)
 	return tag.RowsAffected(), err
+}
+
+// ReserveShareUpload counts one more file of n bytes against a drop link,
+// unless that would pass maxBytes or maxFiles (0: no limit).
+func (s *Store) ReserveShareUpload(ctx context.Context, id, n, maxBytes int64, maxFiles int) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE shares SET upload_bytes = upload_bytes + $2::bigint, upload_files = upload_files + 1
+		WHERE id = $1 AND ($3::bigint = 0 OR upload_bytes + $2::bigint <= $3::bigint) AND ($4::int = 0 OR upload_files < $4::int)`, id, n, maxBytes, maxFiles)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseShareUpload takes back what ReserveShareUpload counted, for an
+// upload that was cancelled, refused or cleaned up.
+func (s *Store) ReleaseShareUpload(ctx context.Context, id, n int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE shares SET upload_bytes = GREATEST(upload_bytes - $2::bigint, 0),
+		upload_files = GREATEST(upload_files - 1, 0) WHERE id = $1`, id, n)
+	return err
+}
+
+// ClaimShareSession binds a single-session link to its first browser,
+// reporting whether this call was the one that did.
+func (s *Store) ClaimShareSession(ctx context.Context, id int64, hash []byte) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE shares SET session_hash = $2 WHERE id = $1 AND session_hash IS NULL`, id, hash)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }

@@ -45,10 +45,13 @@
         uploader = new Uploader('/_upload/', { 'X-Share-Token': token });
       }
     } catch (e) {
-      fatal =
-        e instanceof ApiError && e.status === 404
+      fatal = !(e instanceof ApiError)
+        ? errorMessage(e)
+        : e.status === 404
           ? 'This link is invalid or has expired.'
-          : errorMessage(e);
+          : e.code === 'in_use'
+            ? 'This link has already been opened in another browser, and works only there.'
+            : errorMessage(e);
     }
   }
 
@@ -112,6 +115,20 @@
   }
 
   const crumbs = $derived(pathCrumbs(sub));
+
+  // What a drop link still accepts, in words.
+  const limits = $derived.by(() => {
+    if (!info || info.kind !== 'upload') return '';
+    const parts: string[] = [];
+    if (info.allowed_types?.length)
+      parts.push('Accepts ' + info.allowed_types.join(', ') + ' only');
+    if (info.files_left !== undefined && info.files_left >= 0)
+      parts.push(info.files_left + (info.files_left === 1 ? ' file left' : ' files left'));
+    if (info.bytes_left !== undefined && info.bytes_left >= 0)
+      parts.push(formatSize(info.bytes_left) + ' left');
+    if (info.max_file_bytes) parts.push('up to ' + formatSize(info.max_file_bytes) + ' per file');
+    return parts.join(' · ');
+  });
 
   function pick() {
     if (!fileInput || !uploader) return;
@@ -198,7 +215,10 @@
       </p>
       <button class="primary" onclick={() => fileInput?.click()}>Choose files</button>
       <input type="file" multiple hidden bind:this={fileInput} onchange={pick} />
-      <p class="muted small">Link expires {formatDate(info.expires_at)}</p>
+      <p class="muted small">
+        {#if limits}{limits} ·
+        {/if}Link expires {formatDate(info.expires_at)}
+      </p>
     </div>
     {#if uploader && uploader.items.length}
       <div class="card"><UploadList {uploader} /></div>

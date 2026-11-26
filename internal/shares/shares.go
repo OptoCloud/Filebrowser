@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,11 @@ type Service struct {
 	ShareOrigin   string
 	DefaultExpiry time.Duration
 	MaxExpiry     time.Duration
+	// DropMaxBytes and DropMaxFiles cap a drop link that sets no limit of
+	// its own; UploadMaxSize is the largest upload the server takes.
+	DropMaxBytes  int64
+	DropMaxFiles  int
+	UploadMaxSize int64
 }
 
 type CreateRequest struct {
@@ -52,6 +58,12 @@ type CreateRequest struct {
 	ExpiresIn    int64  `json:"expires_in"`
 	Password     string `json:"password"`
 	MaxDownloads int    `json:"max_downloads"`
+	// Drop links only: what the link accepts (0 or empty: server default).
+	MaxBytes      int64    `json:"max_bytes"`
+	MaxFiles      int      `json:"max_files"`
+	MaxFileBytes  int64    `json:"max_file_bytes"`
+	AllowedTypes  []string `json:"allowed_types"`
+	SingleSession bool     `json:"single_session"`
 }
 
 // Create makes a new share. The plaintext token is returned once and never stored.
@@ -89,6 +101,17 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 	if req.MaxDownloads < 0 {
 		req.MaxDownloads = 0
 	}
+	if req.Kind != "upload" {
+		req.MaxBytes, req.MaxFiles, req.MaxFileBytes, req.AllowedTypes, req.SingleSession = 0, 0, 0, nil, false
+	}
+	if req.MaxBytes < 0 || req.MaxFiles < 0 || req.MaxFileBytes < 0 {
+		return nil, "", InputError("limits cannot be negative")
+	}
+	for _, t := range req.AllowedTypes {
+		if !slices.Contains(files.Categories, t) {
+			return nil, "", InputError("unknown file type " + strconv.Quote(t))
+		}
+	}
 	var pwHash string
 	if req.Password != "" {
 		if n := utf8.RuneCountInString(req.Password); n < MinPasswordLen || len(req.Password) > auth.MaxPasswordLen {
@@ -113,11 +136,71 @@ func (s *Service) Create(ctx context.Context, owner *store.User, a *files.Access
 		ExpiresAt:    time.Now().Add(exp).UTC(),
 		MaxDownloads: req.MaxDownloads,
 		FileID:       fileID,
+		MaxBytes:     req.MaxBytes, MaxFiles: req.MaxFiles, MaxFileBytes: req.MaxFileBytes,
+		AllowedTypes: slices.Compact(slices.Sorted(slices.Values(req.AllowedTypes))), SingleSession: req.SingleSession,
 	}
 	if err := s.Store.CreateShare(ctx, sh); err != nil {
 		return nil, "", err
 	}
 	return sh, token, nil
+}
+
+// Limits are what a drop link accepts, with the server defaults filled in;
+// 0 still means no limit.
+type Limits struct {
+	Bytes     int64 // in total
+	Files     int   // in total
+	FileBytes int64 // per file
+	Types     []string
+}
+
+func (s *Service) Limits(sh *store.Share) Limits {
+	l := Limits{Bytes: sh.MaxBytes, Files: sh.MaxFiles, FileBytes: sh.MaxFileBytes, Types: sh.AllowedTypes}
+	if l.Bytes == 0 {
+		l.Bytes = s.DropMaxBytes
+	}
+	if l.Files == 0 {
+		l.Files = s.DropMaxFiles
+	}
+	if l.FileBytes == 0 || (s.UploadMaxSize > 0 && l.FileBytes > s.UploadMaxSize) {
+		l.FileBytes = s.UploadMaxSize
+	}
+	return l
+}
+
+// Allows reports whether a file of the media type mime may be dropped.
+func (l Limits) Allows(mime string) bool {
+	return len(l.Types) == 0 || slices.Contains(l.Types, files.Category(mime))
+}
+
+func (s *Service) sessionCookieName(id int64) string {
+	if s.Secure {
+		return "__Host-fbd" + strconv.FormatInt(id, 10)
+	}
+	return "fbd" + strconv.FormatInt(id, 10)
+}
+
+// Session reports whether the browser may use sh: always, unless sh is a
+// single-session link, which admits only the first browser to open it. With
+// w set, a link nobody has opened yet is claimed for this browser.
+func (s *Service) Session(ctx context.Context, w http.ResponseWriter, r *http.Request, sh *store.Share) (bool, error) {
+	if !sh.SingleSession {
+		return true, nil
+	}
+	if c, err := r.Cookie(s.sessionCookieName(sh.ID)); err == nil && sh.SessionHash != nil {
+		return auth.ConstantTimeEqual(s.Keys.HashToken(c.Value), sh.SessionHash), nil
+	}
+	if sh.SessionHash != nil || w == nil {
+		return false, nil
+	}
+	nonce := auth.NewToken(18)
+	ok, err := s.Store.ClaimShareSession(ctx, sh.ID, s.Keys.HashToken(nonce))
+	if err != nil || !ok {
+		return false, err
+	}
+	auth.SetCookie(w, auth.Cookie{Name: s.sessionCookieName(sh.ID), Value: nonce, Expires: sh.ExpiresAt,
+		SameSite: http.SameSiteStrictMode}, s.Secure)
+	return true, nil
 }
 
 func (s *Service) URL(token string) string { return s.ShareOrigin + "/s/" + token }

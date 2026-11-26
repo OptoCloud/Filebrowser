@@ -72,6 +72,10 @@ type Trash struct {
 type Shares struct {
 	DefaultExpiry Duration `toml:"default_expiry"`
 	MaxExpiry     Duration `toml:"max_expiry"`
+	// DropMaxBytes and DropMaxFiles cap what one drop (upload) link accepts
+	// in total when the link sets no limit of its own; 0 means no cap.
+	DropMaxBytes int64 `toml:"drop_max_bytes"`
+	DropMaxFiles int   `toml:"drop_max_files"`
 }
 
 type Uploads struct {
@@ -129,8 +133,9 @@ func Default() Config {
 			IdleTimeout:     Duration{7 * 24 * time.Hour},
 			AbsoluteTimeout: Duration{30 * 24 * time.Hour},
 		},
-		Trash:   Trash{RetentionDays: 30},
-		Shares:  Shares{DefaultExpiry: Duration{7 * 24 * time.Hour}, MaxExpiry: Duration{90 * 24 * time.Hour}},
+		Trash: Trash{RetentionDays: 30},
+		Shares: Shares{DefaultExpiry: Duration{7 * 24 * time.Hour}, MaxExpiry: Duration{90 * 24 * time.Hour},
+			DropMaxBytes: 50 << 30, DropMaxFiles: 2000},
 		Uploads: Uploads{MaxSize: 100 << 30},
 		Media: Media{
 			FFmpeg:         "ffmpeg",
@@ -210,6 +215,9 @@ func (c Config) Validate() error {
 	}
 	if c.FilesRoot == "" {
 		errs = append(errs, errors.New("files_root is required"))
+	}
+	if c.Shares.DropMaxBytes < 0 || c.Shares.DropMaxFiles < 0 {
+		errs = append(errs, errors.New("shares.drop_max_bytes and shares.drop_max_files cannot be negative"))
 	}
 	if c.Shares.MaxExpiry.Duration <= 0 {
 		errs = append(errs, errors.New("shares.max_expiry must be positive"))

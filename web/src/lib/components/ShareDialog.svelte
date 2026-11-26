@@ -11,6 +11,20 @@
   let expiresIn = $state(7 * 86400);
   let password = $state('');
   let maxDownloads = $state<number | null>(null);
+  // Drop link limits; empty leaves the server default.
+  let maxTotalGB = $state<number | null>(null);
+  let maxFiles = $state<number | null>(null);
+  let maxFileGB = $state<number | null>(null);
+  let types = $state<string[]>([]);
+  let singleSession = $state(false);
+  const GB = 1024 ** 3;
+  const kinds = [
+    { value: 'image', label: 'Images' },
+    { value: 'video', label: 'Video' },
+    { value: 'audio', label: 'Audio' },
+    { value: 'document', label: 'Documents' },
+    { value: 'archive', label: 'Archives' },
+  ];
   let busy = $state(false);
   let err = $state('');
   let result = $state<{ share: Share; url: string } | null>(null);
@@ -36,6 +50,13 @@
         expires_in: expiresIn,
         password,
         max_downloads: kind === 'download' ? maxDownloads || 0 : 0,
+        ...(kind === 'upload' && {
+          max_bytes: Math.round((maxTotalGB || 0) * GB),
+          max_files: maxFiles || 0,
+          max_file_bytes: Math.round((maxFileGB || 0) * GB),
+          allowed_types: types,
+          single_session: singleSession,
+        }),
       });
       copied = await copyText(result.url);
     } catch (x) {
@@ -96,6 +117,44 @@
           Maximum downloads
           <input type="number" min="1" placeholder="Unlimited" bind:value={maxDownloads} />
         </label>
+      {:else}
+        <label class="field">
+          Total size limit (GB)
+          <input
+            type="number"
+            min="0.001"
+            step="any"
+            placeholder="Server default"
+            bind:value={maxTotalGB}
+          />
+        </label>
+        <label class="field">
+          Maximum number of files
+          <input type="number" min="1" placeholder="Server default" bind:value={maxFiles} />
+        </label>
+        <label class="field">
+          Largest single file (GB)
+          <input
+            type="number"
+            min="0.001"
+            step="any"
+            placeholder="Server default"
+            bind:value={maxFileGB}
+          />
+        </label>
+        <fieldset class="field-row">
+          <legend>Accept only (nothing ticked accepts any file)</legend>
+          {#each kinds as k (k.value)}
+            <label class="inline">
+              <input type="checkbox" bind:group={types} value={k.value} />
+              {k.label}
+            </label>
+          {/each}
+        </fieldset>
+        <label class="inline">
+          <input type="checkbox" bind:checked={singleSession} />
+          Only the first browser to open the link may use it
+        </label>
       {/if}
       {#if err}<div class="error">{err}</div>{/if}
     </form>
@@ -116,5 +175,14 @@
     flex-direction: column;
     gap: 0.4rem;
     margin-bottom: 0.8rem;
+  }
+  fieldset {
+    border: 0;
+    padding: 0;
+    margin-inline: 0;
+  }
+  legend {
+    padding: 0;
+    margin-bottom: 0.3rem;
   }
 </style>
