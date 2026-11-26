@@ -41,8 +41,8 @@
   <div class="bar">
     <strong>{unity ? 'Unity package' : a.format.toUpperCase() + ' archive'}</strong>
     {#if index}
-      <span class="muted small"
-        >{index.truncated ? `first ${index.entries?.length ?? 0} of ` : ''}{index.count}
+      <span class="muted small">
+        {index.truncated ? `first ${index.entries?.length ?? 0} of ` : ''}{index.count}
         {unity
           ? index.count === 1
             ? 'asset'
@@ -51,8 +51,8 @@
             ? 'entry'
             : 'entries'}{index.truncated && index.count <= (index.entries?.length ?? 0)
           ? ' or more'
-          : ''}</span
-      >
+          : ''}
+      </span>
     {/if}
   </div>
   {#if protection}
@@ -73,10 +73,9 @@
   {:else}
     <div class="scroll">
       <table>
-        <thead
-          ><tr><th>Name</th><th class="num">Size</th><th class="hide-mobile">Modified</th></tr
-          ></thead
-        >
+        <thead>
+          <tr><th>Name</th><th class="num">Size</th><th class="hide-mobile">Modified</th></tr>
+        </thead>
         <tbody>
           {#each index.entries as e, i (i)}
             <tr>

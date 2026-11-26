@@ -221,11 +221,11 @@
             <span class="small">
               <strong>{k.name}</strong>
               {#if k.passkey}<span class="badge accent">passkey</span>{/if}
-              <br /><span class="muted"
-                >added {formatDate(k.created_at)} · {k.last_used_at
+              <br /><span class="muted">
+                added {formatDate(k.created_at)} · {k.last_used_at
                   ? 'last used ' + formatDate(k.last_used_at)
-                  : 'never used'}</span
-              >
+                  : 'never used'}
+              </span>
             </span>
             <span class="spacer"></span>
             <button class="small danger" onclick={() => (confirmRemove = k)}>Remove</button>
@@ -252,9 +252,9 @@
 {#if addOpen}
   <Modal title="Add security key" onclose={closeAdd}>
     <form id="add-key-form" onsubmit={addKey}>
-      <label class="field"
-        >Name<input bind:value={keyName} required maxlength="64" disabled={adding} /></label
-      >
+      <label class="field">
+        Name<input bind:value={keyName} required maxlength="64" disabled={adding} />
+      </label>
       <p class="small muted">
         {adding
           ? 'Follow the prompt from your browser: insert or touch your key, or choose where to save the passkey.'
@@ -264,9 +264,9 @@
     </form>
     {#snippet footer()}
       <button onclick={closeAdd}>Cancel</button>
-      <button class="primary" type="submit" form="add-key-form" disabled={adding}
-        >{adding ? 'Waiting for key…' : addErr ? 'Try again' : 'Continue'}</button
-      >
+      <button class="primary" type="submit" form="add-key-form" disabled={adding}>
+        {adding ? 'Waiting for key…' : addErr ? 'Try again' : 'Continue'}
+      </button>
     {/snippet}
   </Modal>
 {/if}

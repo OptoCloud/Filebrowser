@@ -66,29 +66,29 @@
   <ul>
     {#if dir}
       <li>
-        <button class="ghost" onclick={() => open(parentPath(dir))}
-          ><Icon name="up" size={18} />..</button
-        >
+        <button class="ghost" onclick={() => open(parentPath(dir))}>
+          <Icon name="up" size={18} />..
+        </button>
       </li>
     {/if}
     {#each dirs as d (d.path)}
       <li>
-        <button class="ghost" onclick={() => open(d.path)}
-          ><Icon name="folder" size={18} />{d.name}</button
-        >
+        <button class="ghost" onclick={() => open(d.path)}>
+          <Icon name="folder" size={18} />{d.name}
+        </button>
       </li>
     {:else}
       <li class="muted small empty">No subfolders</li>
     {/each}
   </ul>
   {#snippet footer()}
-    <span class="muted small spacer"
-      >{dir ? baseName(dir) : 'Home'}{canPick ? '' : ' (not writable)'}</span
-    >
+    <span class="muted small spacer">
+      {dir ? baseName(dir) : 'Home'}{canPick ? '' : ' (not writable)'}
+    </span>
     <button onclick={onclose}>Cancel</button>
-    <button class="primary" disabled={!canPick} onclick={() => onpick(dir)}
-      >Choose this folder</button
-    >
+    <button class="primary" disabled={!canPick} onclick={() => onpick(dir)}>
+      Choose this folder
+    </button>
   {/snippet}
 </Modal>
 

@@ -310,18 +310,18 @@
     </nav>
     <form class="search" onsubmit={runSearch}>
       <input type="search" placeholder="Search names…" bind:value={query} aria-label="Search" />
-      <button class="icon" aria-label="Search" disabled={searching}
-        ><Icon name="search" size={18} /></button
-      >
+      <button class="icon" aria-label="Search" disabled={searching}>
+        <Icon name="search" size={18} />
+      </button>
     </form>
   </div>
 
   <div class="actions row">
     {#if selection.length}
       <span class="small"><strong>{selection.length}</strong> selected</span>
-      <button class="small" onclick={downloadSelection}
-        ><Icon name="download" size={16} />Download</button
-      >
+      <button class="small" onclick={downloadSelection}>
+        <Icon name="download" size={16} />Download
+      </button>
       {#if canModifySelection}
         {#if selection.length === 1}
           <button
@@ -330,28 +330,28 @@
           >
             <Icon name="edit" size={16} />Rename
           </button>
-          <button class="small" onclick={() => (shareEntry = selection[0])}
-            ><Icon name="share" size={16} />Share</button
-          >
+          <button class="small" onclick={() => (shareEntry = selection[0])}>
+            <Icon name="share" size={16} />Share
+          </button>
         {/if}
-        <button class="small" onclick={() => (moveOpen = true)}
-          ><Icon name="move" size={16} />Move</button
-        >
-        <button class="small danger" onclick={() => (confirmDelete = true)}
-          ><Icon name="trash" size={16} />Delete</button
-        >
+        <button class="small" onclick={() => (moveOpen = true)}>
+          <Icon name="move" size={16} />Move
+        </button>
+        <button class="small danger" onclick={() => (confirmDelete = true)}>
+          <Icon name="trash" size={16} />Delete
+        </button>
       {/if}
       <button class="small ghost" onclick={() => selected.clear()}>Clear</button>
     {:else if writable && results === null}
-      <button class="small primary" onclick={() => fileInput?.click()}
-        ><Icon name="upload" size={16} />Upload</button
-      >
-      <button class="small hide-mobile" onclick={() => dirInput?.click()}
-        ><Icon name="upload" size={16} />Upload folder</button
-      >
-      <button class="small" onclick={() => ((mkdirOpen = true), (newName = ''))}
-        ><Icon name="newfolder" size={16} />New folder</button
-      >
+      <button class="small primary" onclick={() => fileInput?.click()}>
+        <Icon name="upload" size={16} />Upload
+      </button>
+      <button class="small hide-mobile" onclick={() => dirInput?.click()}>
+        <Icon name="upload" size={16} />Upload folder
+      </button>
+      <button class="small" onclick={() => ((mkdirOpen = true), (newName = ''))}>
+        <Icon name="newfolder" size={16} />New folder
+      </button>
       {#if !listing?.grant_root || path}
         <button
           class="small"
@@ -375,14 +375,18 @@
         class="icon"
         class:on={view === 'list'}
         onclick={() => setView('list')}
-        aria-label="List view"><Icon name="list" size={18} /></button
+        aria-label="List view"
       >
+        <Icon name="list" size={18} />
+      </button>
       <button
         class="icon"
         class:on={view === 'grid'}
         onclick={() => setView('grid')}
-        aria-label="Grid view"><Icon name="grid" size={18} /></button
+        aria-label="Grid view"
       >
+        <Icon name="grid" size={18} />
+      </button>
     </div>
   </div>
   <input type="file" multiple hidden bind:this={fileInput} onchange={() => pick(fileInput)} />
@@ -397,11 +401,11 @@
 
   {#if results !== null}
     <div class="notice row">
-      <span
-        >{results.length} result{results.length === 1 ? '' : 's'} for "{query}"{truncated
+      <span>
+        {results.length} result{results.length === 1 ? '' : 's'} for "{query}"{truncated
           ? ' (truncated)'
-          : ''}</span
-      >
+          : ''}
+      </span>
       <span class="spacer"></span>
       <button class="small" onclick={clearSearch}>Clear search</button>
     </div>
@@ -422,50 +426,50 @@
       <table class="data files">
         <thead>
           <tr>
-            <th class="cb"
-              ><input
+            <th class="cb">
+              <input
                 type="checkbox"
                 checked={selected.size > 0 && selected.size === entries.length}
                 onchange={toggleAll}
                 aria-label="Select all"
-              /></th
-            >
-            <th
-              ><button class="ghost small sort" onclick={() => setSort('name')}
-                >Name {sortKey === 'name' ? (sortAsc ? '▲' : '▼') : ''}</button
-              ></th
-            >
-            <th class="num hide-mobile"
-              ><button class="ghost small sort" onclick={() => setSort('size')}
-                >Size {sortKey === 'size' ? (sortAsc ? '▲' : '▼') : ''}</button
-              ></th
-            >
-            <th class="hide-mobile"
-              ><button class="ghost small sort" onclick={() => setSort('mtime')}
-                >Modified {sortKey === 'mtime' ? (sortAsc ? '▲' : '▼') : ''}</button
-              ></th
-            >
+              />
+            </th>
+            <th>
+              <button class="ghost small sort" onclick={() => setSort('name')}>
+                Name {sortKey === 'name' ? (sortAsc ? '▲' : '▼') : ''}
+              </button>
+            </th>
+            <th class="num hide-mobile">
+              <button class="ghost small sort" onclick={() => setSort('size')}>
+                Size {sortKey === 'size' ? (sortAsc ? '▲' : '▼') : ''}
+              </button>
+            </th>
+            <th class="hide-mobile">
+              <button class="ghost small sort" onclick={() => setSort('mtime')}>
+                Modified {sortKey === 'mtime' ? (sortAsc ? '▲' : '▼') : ''}
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
           {#each entries as e, i (e.path)}
             <tr class:sel={selected.has(e.path)}>
-              <td class="cb"
-                ><input
+              <td class="cb">
+                <input
                   type="checkbox"
                   checked={selected.has(e.path)}
                   onclick={(ev) => toggle(e, i, ev)}
                   aria-label={'Select ' + e.name}
-                /></td
-              >
+                />
+              </td>
               <td>
                 <button class="name ghost" onclick={() => openEntry(e)}>
                   <EntryIcon entry={e} />
                   <span class="label">
                     {e.name}
-                    {#if results !== null}<span class="muted small path"
-                        >{parentPath(e.path) || 'Home'}</span
-                      >{/if}
+                    {#if results !== null}<span class="muted small path">
+                        {parentPath(e.path) || 'Home'}
+                      </span>{/if}
                   </span>
                 </button>
               </td>
@@ -479,15 +483,15 @@
   {:else}
     <div class="sortbar row small">
       <span class="muted">Sort:</span>
-      <button class="small ghost" class:on={sortKey === 'name'} onclick={() => setSort('name')}
-        >Name</button
-      >
-      <button class="small ghost" class:on={sortKey === 'size'} onclick={() => setSort('size')}
-        >Size</button
-      >
-      <button class="small ghost" class:on={sortKey === 'mtime'} onclick={() => setSort('mtime')}
-        >Date</button
-      >
+      <button class="small ghost" class:on={sortKey === 'name'} onclick={() => setSort('name')}>
+        Name
+      </button>
+      <button class="small ghost" class:on={sortKey === 'size'} onclick={() => setSort('size')}>
+        Size
+      </button>
+      <button class="small ghost" class:on={sortKey === 'mtime'} onclick={() => setSort('mtime')}>
+        Date
+      </button>
       <span>{sortAsc ? '▲' : '▼'}</span>
     </div>
     <div class="grid">

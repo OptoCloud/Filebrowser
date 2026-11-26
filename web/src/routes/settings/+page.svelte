@@ -127,8 +127,8 @@
         <strong>{me.user.username}</strong> <span class="badge">{me.user.role}</span>
         {#if me.user.quota_bytes > 0}
           <span class="muted small">
-            · {formatSize(me.usage_bytes ?? 0)} of {formatSize(me.user.quota_bytes)} used</span
-          >
+            · {formatSize(me.usage_bytes ?? 0)} of {formatSize(me.user.quota_bytes)} used
+          </span>
         {/if}
       </p>
       {#if me.grants?.length}
@@ -143,48 +143,48 @@
       <h2 class="first">{me.has_password ? 'Change password' : 'Set a password'}</h2>
       <form onsubmit={changePassword}>
         {#if me.has_password}
-          <label class="field"
-            >Current password<input
+          <label class="field">
+            Current password<input
               type="password"
               bind:value={current}
               autocomplete="current-password"
               required
-            /></label
-          >
+            />
+          </label>
         {:else if me.totp_enabled}
-          <label class="field"
-            >Authenticator code<input
+          <label class="field">
+            Authenticator code<input
               bind:value={pwCode}
               inputmode="numeric"
               autocomplete="one-time-code"
               maxlength="6"
               required
-            /></label
-          >
+            />
+          </label>
         {:else}
           <p class="muted">
             For security, setting a first password requires a recent login. If this fails, log out
             and in again.
           </p>
         {/if}
-        <label class="field"
-          >New password (at least 10 characters)<input
+        <label class="field">
+          New password (at least 10 characters)<input
             type="password"
             bind:value={pw1}
             autocomplete="new-password"
             required
             minlength="10"
-          /></label
-        >
-        <label class="field"
-          >Repeat new password<input
+          />
+        </label>
+        <label class="field">
+          Repeat new password<input
             type="password"
             bind:value={pw2}
             autocomplete="new-password"
             required
             minlength="10"
-          /></label
-        >
+          />
+        </label>
         {#if pwErr}<div class="error">{pwErr}</div>{/if}
         {#if pwMsg}<div class="notice">{pwMsg}</div>{/if}
         <button class="primary">Save password</button>
@@ -208,9 +208,9 @@
         <div class="row">
           <a class="btn" href={resolve('/settings/2fa')}>Manage</a>
           {#if canDisableTOTP}
-            <button class="danger" onclick={() => (disableOpen = true)}
-              >Disable authenticator app</button
-            >
+            <button class="danger" onclick={() => (disableOpen = true)}>
+              Disable authenticator app
+            </button>
           {/if}
         </div>
       {:else}
@@ -226,14 +226,13 @@
           <ul class="plain">
             {#each me.oidc as id (id.issuer + id.subject)}
               <li class="row">
-                <span class="small"
-                  ><strong>{id.issuer}</strong><br /><span class="muted mono">{id.subject}</span
-                  ></span
-                >
+                <span class="small">
+                  <strong>{id.issuer}</strong><br /><span class="muted mono">{id.subject}</span>
+                </span>
                 <span class="spacer"></span>
-                <button class="small danger" onclick={() => unlink(id.issuer, id.subject)}
-                  >Unlink</button
-                >
+                <button class="small danger" onclick={() => unlink(id.issuer, id.subject)}>
+                  Unlink
+                </button>
               </li>
             {/each}
           </ul>
@@ -258,9 +257,9 @@
       <div class="row">
         <h2 class="first">Sessions</h2>
         <span class="spacer"></span>
-        <button class="small danger" onclick={() => logout('/api/auth/logout-all')}
-          >Log out everywhere</button
-        >
+        <button class="small danger" onclick={() => logout('/api/auth/logout-all')}>
+          Log out everywhere
+        </button>
       </div>
       {#if sessErr}<div class="error">{sessErr}</div>{/if}
       <ul class="plain">
@@ -269,16 +268,16 @@
             <span class="small">
               <strong>{shortUA(s.user_agent)}</strong>
               {#if s.current}<span class="badge accent">this device</span>{/if}
-              <br /><span class="muted"
-                >{s.ip} · {s.auth_method}{s.mfa ? ' + 2FA' : ''} · last seen {formatDate(
+              <br /><span class="muted">
+                {s.ip} · {s.auth_method}{s.mfa ? ' + 2FA' : ''} · last seen {formatDate(
                   s.last_seen_at
-                )}</span
-              >
+                )}
+              </span>
             </span>
             <span class="spacer"></span>
-            <button class="small" onclick={() => revoke(s)}
-              >{s.current ? 'Log out' : 'Revoke'}</button
-            >
+            <button class="small" onclick={() => revoke(s)}>
+              {s.current ? 'Log out' : 'Revoke'}
+            </button>
           </li>
         {/each}
       </ul>
@@ -290,23 +289,23 @@
   <Modal title="Disable authenticator app" onclose={() => (disableOpen = false)}>
     <form id="disable-form" onsubmit={disableTOTP}>
       {#if me.has_password}
-        <label class="field"
-          >Password<input
+        <label class="field">
+          Password<input
             type="password"
             bind:value={dPassword}
             autocomplete="current-password"
             required
-          /></label
-        >
+          />
+        </label>
       {/if}
-      <label class="field"
-        >Current code<input
+      <label class="field">
+        Current code<input
           bind:value={dCode}
           inputmode="numeric"
           autocomplete="one-time-code"
           required
-        /></label
-      >
+        />
+      </label>
       {#if dErr}<div class="error">{dErr}</div>{/if}
     </form>
     {#snippet footer()}

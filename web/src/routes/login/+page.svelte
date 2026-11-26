@@ -207,9 +207,9 @@
           {busy ? 'Waiting for security key…' : keyTried ? 'Try again' : 'Use security key'}
         </button>
         {#if methods.includes('totp')}
-          <button class="ghost full" onclick={() => switchMode('totp')}
-            >Use an authenticator code instead</button
-          >
+          <button class="ghost full" onclick={() => switchMode('totp')}>
+            Use an authenticator code instead
+          </button>
         {/if}
       {:else if !keyOnlyUnsupported}
         <form onsubmit={verify}>
@@ -229,14 +229,14 @@
           <button class="primary full" disabled={busy}>Verify</button>
         </form>
         {#if keyUsable}
-          <button class="ghost full" onclick={() => switchMode('webauthn')}
-            >Use a security key instead</button
-          >
+          <button class="ghost full" onclick={() => switchMode('webauthn')}>
+            Use a security key instead
+          </button>
         {/if}
       {/if}
-      <button type="button" class="ghost full" onclick={() => (resetToPassword(), (err = ''))}
-        >Back</button
-      >
+      <button type="button" class="ghost full" onclick={() => (resetToPassword(), (err = ''))}>
+        Back
+      </button>
     {:else}
       <form onsubmit={login}>
         <label class="field">
@@ -254,9 +254,9 @@
         <div class="or muted small">or</div>
       {/if}
       {#if supported}
-        <button type="button" class="btn full" onclick={usePasskey} disabled={busy}
-          >Sign in with a passkey</button
-        >
+        <button type="button" class="btn full" onclick={usePasskey} disabled={busy}>
+          Sign in with a passkey
+        </button>
       {/if}
       {#each providers as p (p.id)}
         <a

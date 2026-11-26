@@ -235,10 +235,10 @@
 <svelte:head><title>Admin</title></svelte:head>
 
 {#snippet exemptToggle(o: { mfaExempt: boolean })}
-  <label class="inline"
-    ><input type="checkbox" bind:checked={o.mfaExempt} /> Do not require two-factor authentication (even
-    with write access)</label
-  >
+  <label class="inline">
+    <input type="checkbox" bind:checked={o.mfaExempt} /> Do not require two-factor authentication (even
+    with write access)
+  </label>
 {/snippet}
 
 {#snippet grantEditor(grants: Grant[])}
@@ -260,8 +260,10 @@
     <button
       type="button"
       class="small"
-      onclick={() => grants.push({ path: '', permission: 'read' })}>Add folder access</button
+      onclick={() => grants.push({ path: '', permission: 'read' })}
     >
+      Add folder access
+    </button>
   </div>
 {/snippet}
 
@@ -269,9 +271,9 @@
   <h1>Administration</h1>
   <div class="tabs">
     {#each ['users', 'sessions', 'invites', 'audit'] as t (t)}
-      <button class:active={tab === t} onclick={() => (tab = t as Tab)}
-        >{t[0].toUpperCase() + t.slice(1)}</button
-      >
+      <button class:active={tab === t} onclick={() => (tab = t as Tab)}>
+        {t[0].toUpperCase() + t.slice(1)}
+      </button>
     {/each}
   </div>
   {#if err}<div class="error">{err}</div>{/if}
@@ -279,23 +281,25 @@
 
   {#if tab === 'users'}
     <div class="row bar">
-      <span class="muted small"
-        >{users.length} users. Admins can access everything; other users only their granted folders.</span
-      >
+      <span class="muted small">
+        {users.length} users. Admins can access everything; other users only their granted folders.
+      </span>
       <span class="spacer"></span>
       <button
         class="primary"
-        onclick={() => ((createOpen = true), (modalErr = ''), (nuGrants = []))}>New user</button
+        onclick={() => ((createOpen = true), (modalErr = ''), (nuGrants = []))}
       >
+        New user
+      </button>
     </div>
     <div class="table-wrap">
       <table class="data">
         <thead>
-          <tr
-            ><th>User</th><th>Role</th><th class="hide-mobile">Access</th><th class="hide-mobile"
-              >2FA</th
-            ><th class="hide-mobile">Quota</th><th></th></tr
-          >
+          <tr>
+            <th>User</th><th>Role</th><th class="hide-mobile">Access</th><th class="hide-mobile">
+              2FA
+            </th><th class="hide-mobile">Quota</th><th></th>
+          </tr>
         </thead>
         <tbody>
           {#each users as u (u.id)}
@@ -315,29 +319,33 @@
                     </div>{/each}
                 {/if}
               </td>
-              <td class="hide-mobile"
-                >{#if u.totp_enabled}<span class="badge ok">on</span>{:else}<span class="badge"
-                    >off</span
-                  >{/if}
-                {#if u.webauthn_count}<span class="badge ok"
-                    >{u.webauthn_count}
-                    {u.webauthn_count === 1 ? 'key' : 'keys'}</span
-                  >{/if}
+              <td class="hide-mobile">
+                {#if u.totp_enabled}<span class="badge ok">on</span>{:else}<span class="badge">
+                    off
+                  </span>{/if}
+                {#if u.webauthn_count}<span class="badge ok">
+                    {u.webauthn_count}
+                    {u.webauthn_count === 1 ? 'key' : 'keys'}
+                  </span>{/if}
                 {#if u.mfa_exempt}<span
                     class="badge"
-                    title="Two-factor authentication is not required">not required</span
-                  >{/if}</td
-              >
+                    title="Two-factor authentication is not required"
+                  >
+                    not required
+                  </span>{/if}
+              </td>
               <td class="hide-mobile small">{u.quota_bytes ? formatSize(u.quota_bytes) : '∞'}</td>
               <td class="actions">
                 <button class="small" onclick={() => startEdit(u)}>Edit</button>
                 {#if (u.totp_enabled || u.webauthn_count) && u.id !== myId}<button
                     class="small"
-                    onclick={() => (confirmReset = u)}>Reset two-factor</button
-                  >{/if}
-                {#if u.id !== myId}<button class="small danger" onclick={() => (confirmDelete = u)}
-                    >Delete</button
-                  >{/if}
+                    onclick={() => (confirmReset = u)}
+                  >
+                    Reset two-factor
+                  </button>{/if}
+                {#if u.id !== myId}<button class="small danger" onclick={() => (confirmDelete = u)}>
+                    Delete
+                  </button>{/if}
               </td>
             </tr>
           {/each}
@@ -345,27 +353,27 @@
       </table>
     </div>
     <p class="muted small">
-      Passwords are reset on the server: <span class="mono"
-        >filebrowser user reset-password &lt;name&gt;</span
-      >
+      Passwords are reset on the server: <span class="mono">
+        filebrowser user reset-password &lt;name&gt;
+      </span>
     </p>
   {:else if tab === 'sessions'}
     <div class="table-wrap">
       <table class="data">
-        <thead
-          ><tr
-            ><th>User</th><th class="hide-mobile">Client</th><th>IP</th><th class="hide-mobile"
-              >Method</th
-            ><th>Last seen</th><th></th></tr
-          ></thead
-        >
+        <thead>
+          <tr>
+            <th>User</th><th class="hide-mobile">Client</th><th>IP</th><th class="hide-mobile">
+              Method
+            </th><th>Last seen</th><th></th>
+          </tr>
+        </thead>
         <tbody>
           {#each sessions as s (s.id)}
             <tr>
-              <td
-                >{s.username}
-                {#if s.current}<span class="badge accent">you</span>{/if}</td
-              >
+              <td>
+                {s.username}
+                {#if s.current}<span class="badge accent">you</span>{/if}
+              </td>
               <td class="hide-mobile small muted ua">{s.user_agent}</td>
               <td class="small">{s.ip}</td>
               <td class="hide-mobile small">{s.auth_method}{s.mfa ? ' + 2FA' : ''}</td>
@@ -382,36 +390,39 @@
       <span class="spacer"></span>
       <button
         class="primary"
-        onclick={() => ((inviteOpen = true), (inviteURL = ''), (modalErr = ''))}>New invite</button
+        onclick={() => ((inviteOpen = true), (inviteURL = ''), (modalErr = ''))}
       >
+        New invite
+      </button>
     </div>
     <div class="table-wrap">
       <table class="data">
-        <thead
-          ><tr
-            ><th>Created</th><th>Role</th><th>Access</th><th>Expires</th><th>Status</th><th
-            ></th></tr
-          ></thead
-        >
+        <thead>
+          <tr>
+            <th>Created</th><th>Role</th><th>Access</th><th>Expires</th><th>Status</th><th></th>
+          </tr>
+        </thead>
         <tbody>
           {#each invites as i (i.id)}
             <tr>
               <td class="small">{formatDate(i.created_at)}</td>
               <td>{i.role}</td>
-              <td class="small"
-                >{i.grant_path !== null
+              <td class="small">
+                {i.grant_path !== null
                   ? `/${i.grant_path} (${i.grant_perm})`
                   : 'none'}{#if i.mfa_exempt}<span
                     class="badge"
-                    title="Two-factor authentication will not be required">no 2FA</span
-                  >{/if}</td
-              >
+                    title="Two-factor authentication will not be required"
+                  >
+                    no 2FA
+                  </span>{/if}
+              </td>
               <td class="small">{formatDate(i.expires_at)}</td>
               <td>
                 {#if i.used_at}<span class="badge">used</span>
-                {:else if new Date(i.expires_at).getTime() < Date.now()}<span class="badge bad"
-                    >expired</span
-                  >
+                {:else if new Date(i.expires_at).getTime() < Date.now()}<span class="badge bad">
+                    expired
+                  </span>
                 {:else}<span class="badge ok">open</span>{/if}
               </td>
               <td><button class="small danger" onclick={() => deleteInvite(i)}>Delete</button></td>
@@ -433,12 +444,13 @@
     </form>
     <div class="table-wrap">
       <table class="data">
-        <thead
-          ><tr
-            ><th>Time</th><th>User</th><th>Action</th><th>Target</th><th class="hide-mobile">IP</th
-            ><th class="hide-mobile">Details</th></tr
-          ></thead
-        >
+        <thead>
+          <tr>
+            <th>Time</th><th>User</th><th>Action</th><th>Target</th><th class="hide-mobile">
+              IP
+            </th><th class="hide-mobile">Details</th>
+          </tr>
+        </thead>
         <tbody>
           {#each audit as a (a.id)}
             <tr>
@@ -461,37 +473,32 @@
   <Modal title="New user" wide onclose={() => (createOpen = false)}>
     <form id="create-user" onsubmit={createUser}>
       <div class="two">
-        <label class="field"
-          >Username<input
-            bind:value={nu.username}
-            required
-            maxlength="64"
-            autocomplete="off"
-          /></label
-        >
-        <label class="field"
-          >Initial password (optional, min 10)<input
+        <label class="field">
+          Username<input bind:value={nu.username} required maxlength="64" autocomplete="off" />
+        </label>
+        <label class="field">
+          Initial password (optional, min 10)<input
             type="password"
             bind:value={nu.password}
             minlength="10"
             autocomplete="new-password"
-          /></label
-        >
-        <label class="field"
-          >Role
-          <select bind:value={nu.role}
-            ><option value="user">user</option><option value="admin">admin</option></select
-          >
+          />
         </label>
-        <label class="field"
-          >Quota in GB<input
+        <label class="field">
+          Role
+          <select bind:value={nu.role}>
+            <option value="user">user</option><option value="admin">admin</option>
+          </select>
+        </label>
+        <label class="field">
+          Quota in GB<input
             placeholder="No limit"
             type="number"
             min="0"
             step="any"
             bind:value={nu.quotaGB}
-          /></label
-        >
+          />
+        </label>
       </div>
       {#if nu.role !== 'admin'}
         <p class="small muted">Folder access (paths relative to the files root):</p>
@@ -517,25 +524,25 @@
   <Modal title="Edit {editing.username}" wide onclose={() => (editing = null)}>
     <form id="edit-user" onsubmit={saveEdit}>
       <div class="two">
-        <label class="field"
-          >Role
-          <select bind:value={ed.role}
-            ><option value="user">user</option><option value="admin">admin</option></select
-          >
+        <label class="field">
+          Role
+          <select bind:value={ed.role}>
+            <option value="user">user</option><option value="admin">admin</option>
+          </select>
         </label>
-        <label class="field"
-          >Quota in GB<input
+        <label class="field">
+          Quota in GB<input
             placeholder="No limit"
             type="number"
             min="0"
             step="any"
             bind:value={ed.quotaGB}
-          /></label
-        >
+          />
+        </label>
       </div>
-      <label class="inline"
-        ><input type="checkbox" bind:checked={ed.disabled} /> Disabled (cannot log in, shares stop working)</label
-      >
+      <label class="inline">
+        <input type="checkbox" bind:checked={ed.disabled} /> Disabled (cannot log in, shares stop working)
+      </label>
       {#if ed.role !== 'admin'}
         {@render exemptToggle(ed)}
       {/if}
@@ -560,15 +567,15 @@
       <p class="warn small">It is shown only once.</p>
     {:else}
       <form id="invite-form" onsubmit={createInvite}>
-        <label class="field"
-          >Role
-          <select bind:value={inv.role}
-            ><option value="user">user</option><option value="admin">admin</option></select
-          >
+        <label class="field">
+          Role
+          <select bind:value={inv.role}>
+            <option value="user">user</option><option value="admin">admin</option>
+          </select>
         </label>
-        <label class="inline"
-          ><input type="checkbox" bind:checked={inv.withGrant} /> Grant folder access</label
-        >
+        <label class="inline">
+          <input type="checkbox" bind:checked={inv.withGrant} /> Grant folder access
+        </label>
         {#if inv.role !== 'admin'}
           {@render exemptToggle(inv)}
         {/if}
@@ -579,19 +586,14 @@
               bind:value={inv.grantPath}
               placeholder="path (empty = everything)"
             />
-            <select bind:value={inv.grantPerm}
-              ><option value="read">read</option><option value="write">write</option></select
-            >
+            <select bind:value={inv.grantPerm}>
+              <option value="read">read</option><option value="write">write</option>
+            </select>
           </div>
         {/if}
-        <label class="field"
-          >Valid for (days, max 30)<input
-            type="number"
-            min="1"
-            max="30"
-            bind:value={inv.days}
-          /></label
-        >
+        <label class="field">
+          Valid for (days, max 30)<input type="number" min="1" max="30" bind:value={inv.days} />
+        </label>
         {#if modalErr}<div class="error">{modalErr}</div>{/if}
       </form>
     {/if}

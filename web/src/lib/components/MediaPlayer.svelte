@@ -261,9 +261,9 @@
       </label>
     {/if}
     <span class="spacer"></span>
-    <button class="small" onclick={openExternal}
-      ><Icon name="external" size={16} />Open in VLC / stream URL</button
-    >
+    <button class="small" onclick={openExternal}>
+      <Icon name="external" size={16} />Open in VLC / stream URL
+    </button>
   </div>
   {#if externalErr}<div class="error">{externalErr}</div>{/if}
   {#if externalURL}

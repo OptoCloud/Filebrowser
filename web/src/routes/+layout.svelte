@@ -36,38 +36,46 @@
 {:else}
   <nav class="top">
     <a class="brand" href={filesHref('')}><Icon name="folder" size={22} /> filebrowser</a>
-    <button class="icon menu-btn" onclick={() => (menuOpen = !menuOpen)} aria-label="Menu"
-      ><Icon name="menu" /></button
-    >
+    <button class="icon menu-btn" onclick={() => (menuOpen = !menuOpen)} aria-label="Menu">
+      <Icon name="menu" />
+    </button>
     <div class="links" class:open={menuOpen}>
       {#if !me.restricted}
-        <a href={filesHref('')} class:active={active('/files')} onclick={() => (menuOpen = false)}
-          >Files</a
-        >
+        <a href={filesHref('')} class:active={active('/files')} onclick={() => (menuOpen = false)}>
+          Files
+        </a>
         <a
           href={resolve('/shares')}
           class:active={active('/shares')}
-          onclick={() => (menuOpen = false)}>Shares</a
+          onclick={() => (menuOpen = false)}
         >
+          Shares
+        </a>
         <a
           href={resolve('/trash')}
           class:active={active('/trash')}
-          onclick={() => (menuOpen = false)}>Trash</a
+          onclick={() => (menuOpen = false)}
         >
+          Trash
+        </a>
         {#if me.user.role === 'admin'}
           <a
             href={resolve('/admin')}
             class:active={active('/admin')}
-            onclick={() => (menuOpen = false)}>Admin</a
+            onclick={() => (menuOpen = false)}
           >
+            Admin
+          </a>
         {/if}
       {/if}
       <span class="spacer"></span>
       <a
         href={resolve('/settings')}
         class:active={active('/settings')}
-        onclick={() => (menuOpen = false)}>{me.user.username}</a
+        onclick={() => (menuOpen = false)}
       >
+        {me.user.username}
+      </a>
       <button class="small" onclick={signOut}>Log out</button>
     </div>
   </nav>

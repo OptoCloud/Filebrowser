@@ -210,16 +210,16 @@
         <EntryIcon entry={{ is_dir: false, mime: info.mime }} size={28} />
         <div>
           <h1 class="fname">{info.name}</h1>
-          <span class="muted small"
-            >{formatSize(info.size)} · expires {formatDate(info.expires_at)}
+          <span class="muted small">
+            {formatSize(info.size)} · expires {formatDate(info.expires_at)}
             {#if info.downloads_left !== undefined}
-              · {info.downloads_left} downloads left{/if}</span
-          >
+              · {info.downloads_left} downloads left{/if}
+          </span>
         </div>
         <span class="spacer"></span>
-        <a class="btn primary" href={fileURL('')} rel="external" download
-          ><Icon name="download" size={16} />Download</a
-        >
+        <a class="btn primary" href={fileURL('')} rel="external" download>
+          <Icon name="download" size={16} />Download
+        </a>
       </div>
       <div class="media">
         {#if info.downloads_left !== undefined && !showPreview && (k === 'image' || k === 'video' || k === 'audio' || k === 'pdf')}
@@ -233,9 +233,9 @@
   {:else}
     <div class="head row">
       <nav class="crumbs">
-        <button class="ghost small" onclick={() => openDir('')}
-          ><Icon name="folder" size={18} />{info.name}</button
-        >
+        <button class="ghost small" onclick={() => openDir('')}>
+          <Icon name="folder" size={18} />{info.name}
+        </button>
         {#each crumbs as c (c.path)}
           <span class="muted">/</span>
           <button class="ghost small" onclick={() => openDir(c.path)}>{c.name}</button>
@@ -284,12 +284,12 @@
     <header class="row">
       <strong class="oname">{preview.name}</strong>
       <span class="spacer"></span>
-      <a class="btn small" href={fileURL(preview.path)} rel="external" download
-        ><Icon name="download" size={16} />Download</a
-      >
-      <button class="icon" aria-label="Close" onclick={() => (preview = null)}
-        ><Icon name="close" /></button
-      >
+      <a class="btn small" href={fileURL(preview.path)} rel="external" download>
+        <Icon name="download" size={16} />Download
+      </a>
+      <button class="icon" aria-label="Close" onclick={() => (preview = null)}>
+        <Icon name="close" />
+      </button>
     </header>
     <div class="ostage">
       {#if (k === 'image' && isViewableImage(preview.mime)) || k === 'video' || k === 'audio' || k === 'pdf'}
@@ -297,9 +297,9 @@
       {:else}
         <div class="center">
           <p>No preview available.</p>
-          <a class="btn primary" href={fileURL(preview.path)} rel="external" download
-            >Download ({formatSize(preview.size)})</a
-          >
+          <a class="btn primary" href={fileURL(preview.path)} rel="external" download>
+            Download ({formatSize(preview.size)})
+          </a>
         </div>
       {/if}
     </div>

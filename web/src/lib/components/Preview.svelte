@@ -135,9 +135,9 @@
       <span class="title" title={entry.name}>{entry.name}</span>
       <span class="muted small hide-mobile">{formatSize(entry.size)}</span>
       <span class="spacer"></span>
-      <a class="btn small" href={downloadURL} rel="external" download
-        ><Icon name="download" size={16} /><span class="hide-mobile">Download</span></a
-      >
+      <a class="btn small" href={downloadURL} rel="external" download>
+        <Icon name="download" size={16} /><span class="hide-mobile">Download</span>
+      </a>
       <button class="icon" onclick={onclose} aria-label="Close"><Icon name="close" /></button>
     </header>
     {#if info?.mismatch}
@@ -148,12 +148,12 @@
     {/if}
     <div class="stage">
       {#if fileCount > 1}
-        <button class="nav left" onclick={() => step(-1)} aria-label="Previous"
-          ><Icon name="prev" size={32} /></button
-        >
-        <button class="nav right" onclick={() => step(1)} aria-label="Next"
-          ><Icon name="next" size={32} /></button
-        >
+        <button class="nav left" onclick={() => step(-1)} aria-label="Previous">
+          <Icon name="prev" size={32} />
+        </button>
+        <button class="nav right" onclick={() => step(1)} aria-label="Next">
+          <Icon name="next" size={32} />
+        </button>
       {/if}
       <div class="content">
         {#if err}
@@ -177,9 +177,9 @@
               {#if !tooLarge}
                 <button class="primary" onclick={() => (asked = true)}>Load preview</button>
               {/if}
-              <a class="btn" href={downloadURL} rel="external" download
-                ><Icon name="download" size={16} />Download</a
-              >
+              <a class="btn" href={downloadURL} rel="external" download>
+                <Icon name="download" size={16} />Download
+              </a>
             </p>
           </div>
         {:else if kind === 'image' && isViewableImage(info.mime)}
@@ -209,9 +209,9 @@
           <div class="none">
             <Icon name="file" size={64} />
             <p>No preview available for this file.</p>
-            <a class="btn primary" href={downloadURL} rel="external" download
-              ><Icon name="download" size={16} />Download</a
-            >
+            <a class="btn primary" href={downloadURL} rel="external" download>
+              <Icon name="download" size={16} />Download
+            </a>
           </div>
         {/if}
       </div>

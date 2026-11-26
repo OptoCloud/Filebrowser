@@ -66,12 +66,12 @@
     <form id="share-form" onsubmit={create}>
       {#if entry.is_dir}
         <div class="field-row">
-          <label class="inline"
-            ><input type="radio" bind:group={kind} value="download" /> Download link</label
-          >
-          <label class="inline"
-            ><input type="radio" bind:group={kind} value="upload" /> Upload-only (drop) link</label
-          >
+          <label class="inline">
+            <input type="radio" bind:group={kind} value="download" /> Download link
+          </label>
+          <label class="inline">
+            <input type="radio" bind:group={kind} value="upload" /> Upload-only (drop) link
+          </label>
         </div>
       {/if}
       <label class="field">

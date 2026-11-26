@@ -58,14 +58,14 @@
     <h1>Trash</h1>
     <span class="spacer"></span>
     {#if selected.size}
-      <button onclick={() => restore([...selected])}
-        ><Icon name="restore" size={16} />Restore ({selected.size})</button
-      >
+      <button onclick={() => restore([...selected])}>
+        <Icon name="restore" size={16} />Restore ({selected.size})
+      </button>
       <button class="danger" onclick={() => (confirm = 'selected')}>Delete forever</button>
     {/if}
-    <button class="danger" disabled={!items.length} onclick={() => (confirm = 'all')}
-      >Empty trash</button
-    >
+    <button class="danger" disabled={!items.length} onclick={() => (confirm = 'all')}>
+      Empty trash
+    </button>
   </div>
   {#if retention > 0}<p class="muted small">
       Items are deleted permanently after {retention} days.
@@ -111,17 +111,17 @@
                 />
               </td>
               <td>
-                <span class="row"
-                  ><Icon name={it.is_dir ? 'folder' : 'file'} size={18} />{baseName(
+                <span class="row">
+                  <Icon name={it.is_dir ? 'folder' : 'file'} size={18} />{baseName(
                     it.original_path
-                  )}</span
-                >
+                  )}
+                </span>
               </td>
-              <td class="hide-mobile small"
-                ><a href={filesHref(parentPath(it.original_path))}
-                  >/{parentPath(it.original_path)}</a
-                ></td
-              >
+              <td class="hide-mobile small">
+                <a href={filesHref(parentPath(it.original_path))}>
+                  /{parentPath(it.original_path)}
+                </a>
+              </td>
               <td class="hide-mobile muted">{formatSize(it.size)}</td>
               <td class="muted small">{formatDate(it.trashed_at)}</td>
               <td><button class="small" onclick={() => restore([it.id])}>Restore</button></td>

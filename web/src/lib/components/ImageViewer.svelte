@@ -132,12 +132,12 @@
   </div>
   {#if !failed}
     <div class="tools" role="toolbar" aria-label="Image view">
-      <button onclick={() => zoomAt(1 / 1.5)} disabled={scale <= MIN} aria-label="Zoom out"
-        >−</button
-      >
-      <button class="pct" onclick={reset} title="Fit to window (0)"
-        >{Math.round(scale * 100)}%</button
-      >
+      <button onclick={() => zoomAt(1 / 1.5)} disabled={scale <= MIN} aria-label="Zoom out">
+        −
+      </button>
+      <button class="pct" onclick={reset} title="Fit to window (0)">
+        {Math.round(scale * 100)}%
+      </button>
       <button onclick={() => zoomAt(1.5)} disabled={scale >= MAX} aria-label="Zoom in">+</button>
       <button onclick={() => turns++} aria-label="Rotate" title="Rotate (r)">⟳</button>
     </div>

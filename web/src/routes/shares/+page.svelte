@@ -65,12 +65,12 @@
   <div class="row head">
     <h1>Shared links</h1>
     <span class="spacer"></span>
-    <label class="inline small"
-      ><input type="checkbox" bind:checked={showInactive} /> Show expired/revoked</label
-    >
-    {#if isAdmin}<label class="inline small"
-        ><input type="checkbox" bind:checked={all} /> All users</label
-      >{/if}
+    <label class="inline small">
+      <input type="checkbox" bind:checked={showInactive} /> Show expired/revoked
+    </label>
+    {#if isAdmin}<label class="inline small">
+        <input type="checkbox" bind:checked={all} /> All users
+      </label>{/if}
   </div>
   <p class="muted small">
     Links are shown only once, when created. Create a share from the file browser.
@@ -104,21 +104,20 @@
               </td>
               {#if all}<td>{s.owner}</td>{/if}
               <td>{s.kind === 'upload' ? 'Upload' : 'Download'}</td>
-              <td
-                ><span class="badge" class:ok={s.active} class:bad={!s.active}>{status(s)}</span
-                ></td
-              >
+              <td>
+                <span class="badge" class:ok={s.active} class:bad={!s.active}>{status(s)}</span>
+              </td>
               <td class="hide-mobile small">{formatDate(s.expires_at)}</td>
               <td class="hide-mobile">
                 {s.kind === 'download'
                   ? `${s.download_count}${s.max_downloads ? ' / ' + s.max_downloads : ''}`
                   : ''}
               </td>
-              <td
-                >{#if !s.revoked_at}<button class="small danger" onclick={() => (revoking = s)}
-                    >Revoke</button
-                  >{/if}</td
-              >
+              <td>
+                {#if !s.revoked_at}<button class="small danger" onclick={() => (revoking = s)}>
+                    Revoke
+                  </button>{/if}
+              </td>
             </tr>
           {/each}
         </tbody>
