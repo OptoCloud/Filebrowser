@@ -50,8 +50,12 @@ func (s *Server) inspect(ctx context.Context, p string) (*fileInfo, error) {
 	if files.IsArchive(t.Mime) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		// Summary only (limit 0); a compressed file that is no archive has none.
-		info.Archive, _ = files.InspectArchive(ctx, f, size, t.Mime, 0)
+		var aerr error
+		info.Archive, aerr = files.InspectArchive(ctx, f, size, t.Mime, 0)
 		cancel()
+		if errors.Is(aerr, context.DeadlineExceeded) || errors.Is(aerr, context.Canceled) {
+			return info, nil // too busy to look: answer without it, and do not cache that
+		}
 	}
 	if raw, err := json.Marshal(info); err == nil {
 		if err := s.store.PutFileType(context.WithoutCancel(ctx), p, size, mtime, raw); err != nil {

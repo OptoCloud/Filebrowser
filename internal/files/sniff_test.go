@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
+	"fmt"
 	"testing"
 )
 
@@ -95,6 +97,30 @@ func TestInspectArchive(t *testing.T) {
 	}
 	if a, _ = InspectArchive(ctx, bytes.NewReader(zb.Bytes()), int64(zb.Len()), "application/zip", 1); len(a.Entries) != 1 || !a.Truncated || a.Encrypted != "entries" {
 		t.Fatalf("zip limit: %+v", a)
+	}
+
+	// A trailer that understates the directory: only the bytes it declares
+	// are read, however many headers its offset points at.
+	var big bytes.Buffer
+	zw = zip.NewWriter(&big)
+	for i := range 2000 {
+		zw.Create(fmt.Sprintf("f%04d", i))
+	}
+	zw.Close()
+	lie := bytes.Clone(big.Bytes())
+	eocd := bytes.LastIndex(lie, []byte("PK\x05\x06"))
+	binary.LittleEndian.PutUint32(lie[eocd+12:], 51) // one header: 46 + len("f1999")
+	if a, err = InspectArchive(ctx, bytes.NewReader(lie), int64(len(lie)), "application/zip", 100); err != nil || a.Count != 1 {
+		t.Fatalf("understated zip directory: %+v, %v", a, err)
+	}
+	binary.LittleEndian.PutUint32(lie[eocd+12:], 40)
+	if _, err = InspectArchive(ctx, bytes.NewReader(lie), int64(len(lie)), "application/zip", 100); err == nil {
+		t.Fatal("a directory that does not start at a header was read")
+	}
+	// Data in front of the archive, as a self-extractor has.
+	sfx := append(bytes.Repeat([]byte{0}, 300), zb.Bytes()...)
+	if a, err = InspectArchive(ctx, bytes.NewReader(sfx), int64(len(sfx)), "application/zip", 100); err != nil || a.Count != 2 || a.Entries[0].Name != "dir/a.txt" {
+		t.Fatalf("prefixed zip: %+v, %v", a, err)
 	}
 
 	var tb bytes.Buffer

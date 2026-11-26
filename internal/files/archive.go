@@ -2,7 +2,6 @@ package files
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
@@ -47,6 +46,8 @@ const (
 	max7zHeader     = 1 << 20
 )
 
+var inspecting = make(chan struct{}, 2)
+
 // IsArchive reports verified types InspectArchive understands.
 func IsArchive(mime string) bool {
 	switch mime {
@@ -63,6 +64,14 @@ func IsArchive(mime string) bool {
 // The archive is untrusted: nothing is decompressed into memory, and scans
 // stop at ctx's deadline.
 func InspectArchive(ctx context.Context, f io.ReaderAt, size int64, mime string, limit int) (*Archive, error) {
+	// An index may take maxZipDirectory of memory or a long scan: only a
+	// few are read at once, whoever asks.
+	select {
+	case inspecting <- struct{}{}:
+		defer func() { <-inspecting }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	switch mime {
 	case "application/zip":
 		return inspectZip(f, size, limit)
@@ -89,55 +98,109 @@ var ErrBadArchive = errors.New("not a readable archive")
 
 func inspectZip(f io.ReaderAt, size int64, limit int) (*Archive, error) {
 	a := &Archive{Format: "zip", Encrypted: "no"}
-	// archive/zip loads the whole central directory: check its size first.
-	if n, ok := zipDirectorySize(f, size); !ok || n > maxZipDirectory {
+	dir, ok := zipDirectory(f, size)
+	if !ok {
+		// Zip64, a directory larger than the cap, or a damaged trailer.
 		a.Encrypted, a.Truncated = "unknown", true
 		return a, nil
 	}
-	zr, err := zip.NewReader(f, size)
-	if err != nil {
+	if len(dir) > 0 && !bytes.HasPrefix(dir, []byte("PK\x01\x02")) {
 		return nil, ErrBadArchive
 	}
-	a.Listable, a.Count = true, len(zr.File)
-	for _, zf := range zr.File {
-		enc := zf.Flags&0x1 != 0
-		if enc {
-			a.Encrypted = "entries"
+	a.Listable = true
+	// archive/zip is not used: it takes the directory's place and length
+	// from fields the file controls and allocates for every header it then
+	// finds. Here exactly the bytes checked above are walked.
+	for len(dir) >= zipHeaderLen && bytes.HasPrefix(dir, []byte("PK\x01\x02")) {
+		flags := binary.LittleEndian.Uint16(dir[8:])
+		nameLen := int(binary.LittleEndian.Uint16(dir[28:]))
+		extraLen := int(binary.LittleEndian.Uint16(dir[30:]))
+		commentLen := int(binary.LittleEndian.Uint16(dir[32:]))
+		if len(dir) < zipHeaderLen+nameLen+extraLen+commentLen {
+			a.Truncated = true
+			break
 		}
-		if zf.Flags&0x2000 != 0 { // central directory encryption: names are masked
+		a.Count++
+		if flags&0x2000 != 0 { // central directory encryption: names are masked
 			a.Encrypted, a.Listable = "headers", false
 			a.Entries = nil
 			return a, nil
 		}
-		if len(a.Entries) >= limit {
-			a.Truncated = limit > 0 && a.Count > limit
-			continue // keep looking for encrypted entries
+		enc := flags&0x1 != 0
+		if enc {
+			a.Encrypted = "entries"
 		}
-		a.Entries = append(a.Entries, ArchiveEntry{Name: strings.ToValidUTF8(zf.Name, "�"),
-			Size:  int64(min(zf.UncompressedSize64, 1<<62)), // #nosec G115 -- bounded
-			IsDir: zf.FileInfo().IsDir(), ModTime: zf.Modified.UTC(), Encrypted: enc})
+		if len(a.Entries) < limit {
+			name := string(dir[zipHeaderLen : zipHeaderLen+nameLen])
+			usize := int64(binary.LittleEndian.Uint32(dir[24:]))
+			if usize == 0xffffffff {
+				usize = zip64Size(dir[zipHeaderLen+nameLen : zipHeaderLen+nameLen+extraLen])
+			}
+			a.Entries = append(a.Entries, ArchiveEntry{Name: strings.ToValidUTF8(name, "\ufffd"), Size: usize,
+				IsDir:   strings.HasSuffix(name, "/"),
+				ModTime: dosTime(binary.LittleEndian.Uint16(dir[14:]), binary.LittleEndian.Uint16(dir[12:])), Encrypted: enc})
+		}
+		dir = dir[zipHeaderLen+nameLen+extraLen+commentLen:]
 	}
+	a.Truncated = a.Truncated || (limit > 0 && a.Count > limit)
 	return a, nil
 }
 
-// zipDirectorySize finds the end-of-central-directory record and returns the
-// directory's size. Zip64 archives report false (too large to index here).
-func zipDirectorySize(f io.ReaderAt, size int64) (int64, bool) {
+const zipHeaderLen = 46 // fixed part of a central directory header
+
+// zipDirectory finds the end-of-central-directory record and returns the
+// central directory, read whole. It reports false for zip64 archives and
+// for a directory that is larger than maxZipDirectory or does not lie where
+// the record says: nothing is read on the word of an unchecked field.
+func zipDirectory(f io.ReaderAt, size int64) ([]byte, bool) {
 	const eocdLen, maxComment = 22, 65535
 	n := min(size, eocdLen+maxComment)
 	buf := make([]byte, n)
 	if _, err := f.ReadAt(buf, size-n); err != nil && err != io.EOF {
-		return 0, false
+		return nil, false
 	}
 	i := bytes.LastIndex(buf, []byte("PK\x05\x06"))
 	if i < 0 || len(buf)-i < eocdLen {
-		return 0, false
+		return nil, false
 	}
-	dir := binary.LittleEndian.Uint32(buf[i+12:])
-	if dir == 0xffffffff || binary.LittleEndian.Uint16(buf[i+10:]) == 0xffff {
-		return 0, false
+	eocd := size - n + int64(i)
+	count := binary.LittleEndian.Uint16(buf[i+10:])
+	dirLen := int64(binary.LittleEndian.Uint32(buf[i+12:]))
+	dirOff := int64(binary.LittleEndian.Uint32(buf[i+16:]))
+	if count == 0xffff || dirLen == 0xffffffff || dirOff == 0xffffffff || dirLen > maxZipDirectory || dirLen > eocd {
+		return nil, false
 	}
-	return int64(dir), true
+	// The directory ends where the record begins; a file with data in front
+	// of the archive (a self-extractor) has it later than dirOff says.
+	if dirOff > eocd-dirLen {
+		return nil, false
+	}
+	dir := make([]byte, dirLen)
+	if _, err := f.ReadAt(dir, eocd-dirLen); err != nil && err != io.EOF {
+		return nil, false
+	}
+	return dir, true
+}
+
+// zip64Size is the uncompressed size from a zip64 extra field, or 0.
+func zip64Size(extra []byte) int64 {
+	for len(extra) >= 4 {
+		id, n := binary.LittleEndian.Uint16(extra), int(binary.LittleEndian.Uint16(extra[2:]))
+		if len(extra) < 4+n {
+			break
+		}
+		if id == 0x0001 && n >= 8 {
+			return int64(min(binary.LittleEndian.Uint64(extra[4:]), 1<<62)) // #nosec G115 -- bounded
+		}
+		extra = extra[4+n:]
+	}
+	return 0
+}
+
+// dosTime converts an MS-DOS date and time, which carry no zone, as UTC.
+func dosTime(date, tm uint16) time.Time {
+	return time.Date(int(date>>9)+1980, time.Month(date>>5&0xf), int(date&0x1f),
+		int(tm>>11), int(tm>>5&0x3f), int(tm&0x1f)*2, 0, time.UTC)
 }
 
 type ctxReader struct {
