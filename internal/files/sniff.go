@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -311,10 +312,8 @@ func VerifySize(name string, head []byte, size int64) Type {
 		}
 		return Type{Mime: claimed}
 	}
-	for _, flavour := range containers[sniffed] {
-		if claimed == flavour {
-			return Type{Mime: claimed}
-		}
+	if slices.Contains(containers[sniffed], claimed) {
+		return Type{Mime: claimed}
 	}
 	// The content is a known format the name does not claim. Text formats
 	// found under a generic text name (an .xml that is XML, a .txt that is
