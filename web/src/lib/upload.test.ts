@@ -158,5 +158,36 @@ describe('Uploader', () => {
     const shareB = await fingerprint({ 'X-Share-Token': 'bbb' }, 'a', 'x/same.txt');
     expect(shareA).not.toBe(base);
     expect(shareA).not.toBe(shareB);
+    // It is kept in localStorage: the token itself is not in it.
+    expect(shareA).not.toContain('aaa');
+  });
+
+  it('retries a failed upload, unless the server refused the file', async () => {
+    const failed = (status?: number) =>
+      Object.assign(new Error('failed'), {
+        originalResponse: status
+          ? { getStatus: () => status, getBody: () => 'ERR_FB_REJECTED: no such kind here' }
+          : null,
+      });
+    const up = new Uploader('/api/uploads/');
+    up.add(picked(2), '');
+    await flush();
+    const [a, b] = up.items;
+
+    mocks.instances[0].options.onError(failed()); // the network
+    expect(a.status).toBe('error');
+    expect(up.canRetry(a.id)).toBe(true);
+    mocks.instances[1].options.onError(failed(415)); // a refusal
+    expect(b.error).toBe('no such kind here');
+    expect(up.canRetry(b.id)).toBe(false);
+
+    up.retry(a.id);
+    await flush();
+    expect(a.status).toBe('uploading');
+    expect(a.error).toBeUndefined();
+    expect(mocks.instances).toHaveLength(3);
+    mocks.instances[2].options.onSuccess();
+    expect(a.status).toBe('done');
+    expect(up.canRetry(a.id)).toBe(false);
   });
 });

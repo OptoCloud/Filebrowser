@@ -43,6 +43,8 @@
       info = await get<ShareInfo>(base + '/api/info');
       if (info.unlocked && info.kind === 'upload' && !uploader) {
         uploader = new Uploader('/_upload/', { 'X-Share-Token': token });
+        // What the link still accepts changes with every file it takes.
+        uploader.onFileDone(() => void loadInfo());
       }
     } catch (e) {
       fatal = !(e instanceof ApiError)
@@ -116,12 +118,21 @@
 
   const crumbs = $derived(pathCrumbs(sub));
 
+  const typeNames: Record<string, string> = {
+    image: 'images',
+    video: 'video',
+    audio: 'audio',
+    document: 'documents',
+    archive: 'archives',
+  };
   // What a drop link still accepts, in words.
   const limits = $derived.by(() => {
     if (!info || info.kind !== 'upload') return '';
     const parts: string[] = [];
     if (info.allowed_types?.length)
-      parts.push('Accepts ' + info.allowed_types.join(', ') + ' only');
+      parts.push(
+        'Accepts ' + info.allowed_types.map((t) => typeNames[t] ?? t).join(', ') + ' only'
+      );
     if (info.files_left !== undefined && info.files_left >= 0)
       parts.push(info.files_left + (info.files_left === 1 ? ' file left' : ' files left'));
     if (info.bytes_left !== undefined && info.bytes_left >= 0)
@@ -194,7 +205,7 @@
         />
         <button class="primary" disabled={busy}>Unlock</button>
       </form>
-      {#if pwErr}<div class="error">{pwErr}</div>{/if}
+      {#if pwErr}<div class="error" role="alert">{pwErr}</div>{/if}
     </div>
   {:else if info.kind === 'upload'}
     <div
@@ -216,8 +227,7 @@
       <button class="primary" onclick={() => fileInput?.click()}>Choose files</button>
       <input type="file" multiple hidden bind:this={fileInput} onchange={pick} />
       <p class="muted small">
-        {#if limits}{limits} ·
-        {/if}Link expires {formatDate(info.expires_at)}
+        {limits ? limits + ' · ' : ''}Link expires {formatDate(info.expires_at)}
       </p>
     </div>
     {#if uploader && uploader.items.length}
@@ -276,7 +286,7 @@
         ? ` · ${info.downloads_left} downloads left`
         : ''}
     </p>
-    {#if listErr}<div class="error">{listErr}</div>{/if}
+    {#if listErr}<div class="error" role="alert">{listErr}</div>{/if}
     <div class="grid">
       {#each entries as e (e.path)}
         <div class="tile">

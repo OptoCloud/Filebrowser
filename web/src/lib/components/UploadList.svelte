@@ -25,15 +25,30 @@
           {/if}
         </span>
         {#if it.status === 'uploading' || it.status === 'queued'}
-          <button class="icon" onclick={() => uploader.cancel(it.id)} aria-label="Cancel">
+          <button
+            class="icon"
+            onclick={() => uploader.cancel(it.id)}
+            aria-label={'Cancel ' + it.name}
+          >
             <Icon name="close" size={16} />
           </button>
+        {:else if uploader.canRetry(it.id)}
+          <button class="small" onclick={() => uploader.retry(it.id)}>Retry</button>
         {/if}
       </div>
       {#if it.status === 'uploading'}
-        <div class="progress"><div style="width:{pct(it)}%"></div></div>
+        <div
+          class="progress"
+          role="progressbar"
+          aria-label={'Uploading ' + it.name}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={Math.floor(pct(it))}
+        >
+          <div style="width:{pct(it)}%"></div>
+        </div>
       {/if}
-      {#if it.status === 'error'}<div class="err small">{it.error}</div>{/if}
+      {#if it.status === 'error'}<div class="err small" role="alert">{it.error}</div>{/if}
     </li>
   {/each}
 </ul>

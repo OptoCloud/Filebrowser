@@ -19,6 +19,32 @@ export interface UploadItem {
   storedName?: string;
 }
 
+/** Prefix of the upload fingerprints, under which tus-js-client keeps what it needs to resume. */
+const FINGERPRINT = 'fb';
+
+async function digest(s: string): Promise<string> {
+  if (!s) return '';
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(hash).subarray(0, 12), (b) =>
+    b.toString(16).padStart(2, '0')
+  ).join('');
+}
+
+/**
+ * Removes what was kept to resume unfinished uploads (file names and
+ * folders), for signing out on a shared computer.
+ */
+export function forgetUploads() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(`tus::${FINGERPRINT}|`)) localStorage.removeItem(k);
+    }
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 const CHUNK = 50 * 1024 * 1024; // stays below Cloudflare's 100 MB request body limit
 const CONCURRENCY = 3;
 
@@ -35,10 +61,19 @@ function tusError(err: Error): string {
   } catch {
     /* plain text */
   }
+  // The server's own refusals come as "ERR_FB_REJECTED: <what to tell the user>".
+  body = body.replace(/^ERR_[A-Z_]+:\s*/, '');
   if (status === 401) return 'Not authorized (session expired or password required)';
   if (status === 429) return 'Too many requests, try again later';
   if (status === 413) return body.trim() || 'File too large or quota exceeded';
   return body.trim() || `Upload failed (HTTP ${status})`;
+}
+
+function tusStatus(err: Error): number {
+  return (
+    (err as Error & { originalResponse?: tus.HttpResponse | null }).originalResponse?.getStatus() ??
+    0
+  );
 }
 
 /** A queue of tus uploads with reactive progress. */
@@ -50,6 +85,9 @@ export class Uploader {
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private finishers = new Map<number, () => void>();
   private queue: { item: UploadItem; file: File; dir: string }[] = [];
+  // What each failed or cancelled item was, so that it can be tried again.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private retryable = new Map<number, { file: File; dir: string }>();
   private active = 0;
   private endpoint: string;
   private headers: Record<string, string>;
@@ -123,11 +161,13 @@ export class Uploader {
       removeFingerprintOnSuccess: true,
       // The default fingerprint ignores the destination, so identical files in
       // different folders (or shares) would resume each other's uploads.
+      // It is stored in localStorage until the upload succeeds, so the
+      // share token goes in hashed.
       fingerprint: async (f) =>
         [
-          'fb',
+          FINGERPRINT,
           this.endpoint,
-          this.headers['X-Share-Token'] ?? '',
+          await digest(this.headers['X-Share-Token'] ?? ''),
           dir,
           item.relativePath,
           f.size,
@@ -158,6 +198,10 @@ export class Uploader {
         if (finished) return;
         item.status = 'error';
         item.error = tusError(err);
+        // An answer that says no (too large, wrong kind, forbidden) will say so again.
+        const status = tusStatus(err);
+        if (!status || status >= 500 || status === 409 || status === 423 || status === 429)
+          this.retryable.set(item.id, { file, dir });
         finish();
       },
     });
@@ -191,12 +235,30 @@ export class Uploader {
     }
   }
 
+  /** Whether a failed upload can be tried again. */
+  canRetry(id: number): boolean {
+    return this.items.some((i) => i.id === id && i.status === 'error') && this.retryable.has(id);
+  }
+
+  /** Queues a failed upload again; it resumes from what the server already has. */
+  retry(id: number) {
+    const item = this.items.find((i) => i.id === id);
+    const again = this.retryable.get(id);
+    if (!item || !again || item.status !== 'error') return;
+    this.retryable.delete(id);
+    item.status = 'queued';
+    item.error = undefined;
+    this.queue.push({ item, ...again });
+    this.pump();
+  }
+
   cancelAll() {
     for (const i of this.items) this.cancel(i.id);
   }
 
   clearFinished() {
     this.items = this.items.filter((i) => i.status === 'queued' || i.status === 'uploading');
+    this.retryable.clear();
   }
 }
 
