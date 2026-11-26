@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	tushandler "github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/memorylocker"
@@ -177,7 +176,7 @@ func (u *Uploads) appCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse, t
 	if err != nil {
 		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
 	}
-	return tushandler.HTTPResponse{}, u.changes(uploadID, "u:"+strconv.FormatInt(id.User.ID, 10), id.User.ID, dir, name), nil
+	return tushandler.HTTPResponse{}, u.changes(uploadID, userOwner(id.User.ID), id.User.ID, dir, name), nil
 }
 
 func (u *Uploads) appFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse, error) {
@@ -200,59 +199,26 @@ func (u *Uploads) shareCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 	if res == nil || res.Share.Kind != "upload" {
 		return tushandler.HTTPResponse{}, none, reject(http.StatusForbidden, "forbidden")
 	}
-	base := res.Root
-	if res.Share.AskName {
-		// Each uploader's files go into a folder of the name they gave.
-		who := strings.TrimSpace(ev.Upload.MetaData["uploader"])
-		if files.ValidName(who) != nil || utf8.RuneCountInString(who) > 64 {
-			return tushandler.HTTPResponse{}, none, reject(http.StatusBadRequest, "enter your name first")
-		}
-		base = files.Join(base, who)
-	}
-	dir, name, err := target(base, ev.Upload.MetaData)
+	dir, name, lim, err := u.dropPlan(res, ev.Upload.MetaData, ev.Upload.Size)
 	if err != nil {
 		return tushandler.HTTPResponse{}, none, err
-	}
-	dir, err = u.files.FS.Authorize(res.Access, dir, files.PermWrite)
-	if err != nil || !files.Within(dir, res.Root) {
-		return tushandler.HTTPResponse{}, none, reject(http.StatusForbidden, "forbidden")
-	}
-	lim := u.shares.Limits(res.Share)
-	if lim.FileBytes > 0 && ev.Upload.Size > lim.FileBytes {
-		return tushandler.HTTPResponse{}, none, reject(http.StatusRequestEntityTooLarge, "this file is larger than the link accepts")
-	}
-	// By name for now, so that a file of the wrong kind is refused before
-	// it is sent; shareFinish looks at what was received.
-	if t := files.MimeType(name); t != "application/octet-stream" && !lim.Allows(t) {
-		return tushandler.HTTPResponse{}, none, reject(http.StatusUnsupportedMediaType, "this link does not accept this kind of file")
 	}
 	uploadID, err := u.reserve(ev, res.Access, res.Owner.ID, res.Owner.QuotaBytes)
 	if err != nil {
 		return tushandler.HTTPResponse{}, none, err
 	}
-	ok, err := u.shares.Store.ReserveShareUpload(ev.Context, res.Share.ID, ev.Upload.Size, lim.Bytes, lim.Files)
-	if err != nil || !ok {
+	if err := u.reserveDrop(ev.Context, res.Share.ID, ev.Upload.Size, lim); err != nil {
 		u.files.Release(uploadID)
-		if err != nil {
-			slog.Error("reserve drop upload", "share", res.Share.ID, "err", err)
-			return tushandler.HTTPResponse{}, none, reject(http.StatusInternalServerError, "internal error")
-		}
-		return tushandler.HTTPResponse{}, none, reject(http.StatusRequestEntityTooLarge, "this link has reached its upload limit")
+		return tushandler.HTTPResponse{}, none, err
 	}
-	return tushandler.HTTPResponse{}, u.changes(uploadID, "s:"+strconv.FormatInt(res.Share.ID, 10), res.Owner.ID, dir, name), nil
+	return tushandler.HTTPResponse{}, u.changes(uploadID, shareOwner(res.Share.ID), res.Owner.ID, dir, name), nil
 }
 
 // release gives back what an upload that will not be finished had reserved:
 // its owner's quota and, through a drop link, the link's allowance.
 func (u *Uploads) release(ctx context.Context, info tushandler.FileInfo) {
 	u.files.Release(info.ID)
-	if v, ok := strings.CutPrefix(fact(info, storageOwner, legacyOwner), "s:"); ok {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			if err := u.shares.Store.ReleaseShareUpload(context.WithoutCancel(ctx), id, info.Size); err != nil {
-				slog.Error("release drop upload", "share", id, "err", err)
-			}
-		}
-	}
+	u.releaseDrop(ctx, fact(info, storageOwner, legacyOwner), info.Size)
 }
 
 // changes records the upload's owner and destination, and stages its data on
@@ -448,14 +414,14 @@ func (u *Uploads) guard(next http.Handler, owner func(*http.Request) string) htt
 
 func (u *Uploads) appOwner(r *http.Request) string {
 	if id := httpx.IdentityFrom(r.Context()); id != nil {
-		return "u:" + strconv.FormatInt(id.User.ID, 10)
+		return userOwner(id.User.ID)
 	}
 	return ""
 }
 
 func (u *Uploads) shareOwner(r *http.Request) string {
 	if res, _ := r.Context().Value(shareCtxKey{}).(*shares.Resolved); res != nil {
-		return "s:" + strconv.FormatInt(res.Share.ID, 10)
+		return shareOwner(res.Share.ID)
 	}
 	return ""
 }
@@ -501,7 +467,7 @@ func (u *Uploads) withShare(next http.Handler) http.Handler {
 func quotaUser(info tushandler.FileInfo) int64 {
 	v := info.Storage[storageUser]
 	if v == "" {
-		v, _ = strings.CutPrefix(fact(info, storageOwner, legacyOwner), "u:")
+		v, _ = strings.CutPrefix(fact(info, storageOwner, legacyOwner), userOwnerPrefix)
 	}
 	id, _ := strconv.ParseInt(v, 10, 64)
 	return id
@@ -584,7 +550,7 @@ func (u *Uploads) Cleanup(maxAge time.Duration) {
 			ru := up.(*rootUpload)
 			fresh := !stale(ru.binPath())
 			if fi, err := root.Stat(ru.binPath()); err == nil && fi.ModTime().Before(dropCutoff) &&
-				strings.HasPrefix(fact(ru.info, storageOwner, legacyOwner), "s:") {
+				strings.HasPrefix(fact(ru.info, storageOwner, legacyOwner), shareOwnerPrefix) {
 				fresh = false
 			}
 			if fresh {

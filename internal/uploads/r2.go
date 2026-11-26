@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	tushandler "github.com/tus/tusd/v2/pkg/handler"
 
@@ -78,7 +77,7 @@ func (u *Uploads) EnableR2(client *r2.Client, cfg config.R2) *R2 {
 			httpx.Error(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		r.serve(w, req, &r2Actor{owner: "u:" + strconv.FormatInt(id.User.ID, 10), user: id.User, access: id.Access, identity: id})
+		r.serve(w, req, &r2Actor{owner: userOwner(id.User.ID), user: id.User, access: id.Access, identity: id})
 	})
 	r.Share = u.withShare(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		res, _ := req.Context().Value(shareCtxKey{}).(*shares.Resolved)
@@ -86,7 +85,7 @@ func (u *Uploads) EnableR2(client *r2.Client, cfg config.R2) *R2 {
 			httpx.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
-		r.serve(w, req, &r2Actor{owner: "s:" + strconv.FormatInt(res.Share.ID, 10), user: res.Owner, access: res.Access, share: res})
+		r.serve(w, req, &r2Actor{owner: shareOwner(res.Share.ID), user: res.Owner, access: res.Access, share: res})
 	}))
 	r.restoreReservations()
 	u.r2 = r
@@ -149,42 +148,25 @@ func (r *R2) begin(w http.ResponseWriter, req *http.Request, a *r2Actor) {
 		fail(http.StatusRequestEntityTooLarge, "file too large")
 		return
 	}
-	base, lim := "", shares.Limits{}
+	meta := tushandler.MetaData{"filename": in.Name, "dir": in.Dir, "relativePath": in.RelativePath, metaUploader: in.Uploader}
+	var dir, name string
+	var lim shares.Limits
+	var err error
 	if a.share != nil {
-		base, lim = a.share.Root, r.u.shares.Limits(a.share.Share)
-		if a.share.Share.AskName {
-			who := strings.TrimSpace(in.Uploader)
-			if files.ValidName(who) != nil || utf8.RuneCountInString(who) > 64 {
-				fail(http.StatusBadRequest, "enter your name first")
-				return
-			}
-			base = files.Join(base, who)
-		}
 		if r.u.allowDrop != nil && !r.u.allowDrop(httpx.LimitKey(ctx)) {
 			w.Header().Set("Retry-After", "60")
 			fail(http.StatusTooManyRequests, "too many uploads, try again later")
 			return
 		}
+		dir, name, lim, err = r.u.dropPlan(a.share, meta, in.Size)
+	} else if dir, name, err = target("", meta); err == nil {
+		if dir, err = r.u.files.FS.Authorize(a.access, dir, files.PermWrite); err != nil {
+			err = reject(http.StatusForbidden, "forbidden")
+		}
 	}
-	dir, name, err := target(base, tushandler.MetaData{"filename": in.Name, "dir": in.Dir, "relativePath": in.RelativePath})
 	if err != nil {
-		fail(http.StatusBadRequest, "invalid file name or folder")
+		fail(rejection(err))
 		return
-	}
-	dir, err = r.u.files.FS.Authorize(a.access, dir, files.PermWrite)
-	if err != nil || (a.share != nil && !files.Within(dir, a.share.Root)) {
-		fail(http.StatusForbidden, "forbidden")
-		return
-	}
-	if a.share != nil {
-		if lim.FileBytes > 0 && in.Size > lim.FileBytes {
-			fail(http.StatusRequestEntityTooLarge, "this file is larger than the link accepts")
-			return
-		}
-		if t := files.MimeType(name); t != "application/octet-stream" && !lim.Allows(t) {
-			fail(http.StatusUnsupportedMediaType, "this link does not accept this kind of file")
-			return
-		}
 	}
 	// What the bucket may come to hold at once is bounded: it is what it can cost.
 	if pending, err := r.store.R2PendingBytes(ctx); err != nil {
@@ -202,19 +184,14 @@ func (r *R2) begin(w http.ResponseWriter, req *http.Request, a *r2Actor) {
 	}
 	undo := func() { r.u.files.Release(id) }
 	if a.share != nil {
-		ok, err := r.store.ReserveShareUpload(ctx, a.share.Share.ID, in.Size, lim.Bytes, lim.Files)
-		if err != nil || !ok {
+		if err := r.u.reserveDrop(ctx, a.share.Share.ID, in.Size, lim); err != nil {
 			undo()
-			if err != nil {
-				httpx.InternalError(w, req, err)
-				return
-			}
-			fail(http.StatusRequestEntityTooLarge, "this link has reached its upload limit")
+			fail(rejection(err))
 			return
 		}
 		undo = func() {
 			r.u.files.Release(id)
-			_ = r.store.ReleaseShareUpload(context.WithoutCancel(ctx), a.share.Share.ID, in.Size)
+			r.u.releaseDrop(ctx, a.owner, in.Size)
 		}
 	}
 	// Parts are all of one size but the last; a very large file gets larger parts.
@@ -401,13 +378,7 @@ func (r *R2) abort(w http.ResponseWriter, req *http.Request, a *r2Actor) {
 // release gives back the quota and, for a drop link, the allowance of up.
 func (r *R2) release(ctx context.Context, up *store.R2Upload) {
 	r.u.files.Release(up.ID)
-	if v, ok := strings.CutPrefix(up.Owner, "s:"); ok {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			if err := r.store.ReleaseShareUpload(ctx, id, up.Size); err != nil {
-				slog.Error("release drop upload", "share", id, "err", err)
-			}
-		}
-	}
+	r.u.releaseDrop(ctx, up.Owner, up.Size)
 }
 
 // expire ends an upload that is still being sent: its parts are discarded.
@@ -527,8 +498,7 @@ func (r *R2) pull(ctx context.Context, up *store.R2Upload) (string, error) {
 		return "", refusal("the destination is no longer writable")
 	}
 	var share *store.Share
-	if v, ok := strings.CutPrefix(up.Owner, "s:"); ok {
-		id, _ := strconv.ParseInt(v, 10, 64)
+	if id, ok := ownerShare(up.Owner); ok {
 		if share, err = r.store.ShareByID(ctx, id); err != nil {
 			return "", refusal("the link no longer exists")
 		}
@@ -627,7 +597,7 @@ func (r *R2) Cleanup(ctx context.Context, maxAge time.Duration) {
 	}
 	for _, up := range ups {
 		age := maxAge
-		if strings.HasPrefix(up.Owner, "s:") {
+		if _, drop := ownerShare(up.Owner); drop {
 			age = min(age, dropStale)
 		}
 		if time.Since(up.UpdatedAt) > age {
