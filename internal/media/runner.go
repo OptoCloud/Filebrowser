@@ -98,7 +98,13 @@ func (r *Runner) Command(ctx context.Context, tool string, in *Input, writeDir s
 	argv = append(argv, r.cfg.Wrapper...)
 	switch r.cfg.Sandbox {
 	case "bwrap":
-		argv = append(argv, bwrapArgs(bin, writeDir)...)
+		seccomp := -1
+		if f := seccompFile(); f != nil {
+			// Inherited files are numbered from 3, in order.
+			seccomp = 3 + len(extra)
+			extra = append(extra, f)
+		}
+		argv = append(argv, bwrapArgs(bin, writeDir, seccomp)...)
 	case "appcontainer":
 		// This executable in launcher mode (see internal/sandbox). The launcher
 		// runs with a minimal PATH, so resolve the tool here.
@@ -137,7 +143,10 @@ func (r *Runner) Command(ctx context.Context, tool string, in *Input, writeDir s
 	return cmd
 }
 
-func bwrapArgs(bin, writeDir string) []string {
+// bwrapArgs is the bubblewrap command line up to the tool's own. seccomp is
+// the descriptor of the system call filter to load (see seccompFilter), or
+// negative for none.
+func bwrapArgs(bin, writeDir string, seccomp int) []string {
 	a := []string{"bwrap",
 		"--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
 		"--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
@@ -155,6 +164,9 @@ func bwrapArgs(bin, writeDir string) []string {
 	}
 	if writeDir != "" {
 		a = append(a, "--bind", writeDir, writeDir)
+	}
+	if seccomp >= 0 {
+		a = append(a, "--seccomp", strconv.Itoa(seccomp))
 	}
 	return append(a, "--")
 }
