@@ -106,6 +106,9 @@ func (s *Store) DeleteWebAuthnCredential(ctx context.Context, userID int64, id [
 		if keepOne && !hasTOTP && n <= 1 {
 			return ErrLastLogin // rolls the delete back
 		}
+		if !hasTOTP && n <= 1 {
+			return clearSessionMFA(ctx, q, userID)
+		}
 		return nil
 	})
 }
@@ -118,7 +121,9 @@ func (s *Store) ResetSecondFactors(ctx context.Context, userID int64) error {
 		if err := affected(tag, err); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM webauthn_credentials WHERE user_id = $1`, userID)
-		return err
+		if _, err = tx.Exec(ctx, `DELETE FROM webauthn_credentials WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
+		return clearSessionMFA(ctx, tx, userID)
 	})
 }

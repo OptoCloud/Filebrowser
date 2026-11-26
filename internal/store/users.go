@@ -118,9 +118,41 @@ func (s *Store) EnableTOTP(ctx context.Context, id int64, enc []byte, lastStep i
 		`UPDATE users SET totp_secret = $2, totp_pending = NULL, totp_last_step = $3 WHERE id = $1`, id, enc, lastStep))
 }
 
-func (s *Store) DisableTOTP(ctx context.Context, id int64) error {
-	return affected(s.pool.Exec(ctx,
-		`UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = 0 WHERE id = $1`, id))
+// DisableTOTP removes the user's TOTP. It returns ErrLastLogin instead if
+// keepOne is set and TOTP is the user's last second factor (no key). The
+// check holds the same row lock as DeleteWebAuthnCredential, so the two
+// cannot each take the other's factor for the one that stays.
+func (s *Store) DisableTOTP(ctx context.Context, id int64, keepOne bool) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var one int
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&one); err != nil {
+			return notFound(err)
+		}
+		var keys int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM webauthn_credentials WHERE user_id = $1`, id).Scan(&keys); err != nil {
+			return err
+		}
+		if keepOne && keys == 0 {
+			return ErrLastLogin
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = 0 WHERE id = $1`, id); err != nil {
+			return err
+		}
+		if keys == 0 {
+			return clearSessionMFA(ctx, tx, id)
+		}
+		return nil
+	})
+}
+
+// clearSessionMFA marks the user's sessions as not having presented a second
+// factor, once the user has none left: a session must not go on vouching
+// for a factor that is gone. (A session whose factor the login provider
+// vouched for loses the mark too, until the next login through it.)
+func clearSessionMFA(ctx context.Context, tx pgx.Tx, userID int64) error {
+	_, err := tx.Exec(ctx, `UPDATE sessions SET mfa = false WHERE user_id = $1 AND mfa`, userID)
+	return err
 }
 
 // ConsumeTOTPStep records a used time step, failing if it (or a later one) was

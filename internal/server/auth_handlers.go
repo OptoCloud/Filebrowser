@@ -444,7 +444,11 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code.Reset()
-	if err := s.store.DisableTOTP(ctx, id.User.ID); err != nil {
+	if err := s.store.DisableTOTP(ctx, id.User.ID, requiresTOTP(id)); errors.Is(err, store.ErrLastLogin) {
+		// A key removed since the check above: TOTP is now the last factor.
+		httpx.Error(w, http.StatusForbidden, "two-factor authentication is required for your account: add a security key first")
+		return
+	} else if err != nil {
 		httpx.InternalError(w, r, err)
 		return
 	}

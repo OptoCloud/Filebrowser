@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -572,4 +573,31 @@ func TestShareCountedCookieExpires(t *testing.T) {
 	sig := h.srv.keys.Sign("share-counted", []byte(strconv.FormatInt(sh[0].ID, 10)))
 	old.cookies[counted.Name] = &http.Cookie{Name: counted.Name, Value: base64.RawURLEncoding.EncodeToString(sig)}
 	expect(t, old.do("GET", "/s/"+token+"/file", nil), 410)
+}
+
+// Removing the last second factor is decided under one lock with the other
+// way of removing one, and a session stops vouching for a factor that is gone.
+func TestLastFactorRemoval(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	u := h.user("mia", "user", store.Grant{Path: "mia", Permission: "write"})
+	if err := h.store.EnableTOTP(ctx, u.ID, []byte("enc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	c := h.session(u, 0) // a session that presented a second factor
+	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["restricted"] != false {
+		t.Fatalf("me = %v", me)
+	}
+	// TOTP is the only factor of an account that needs one: it stays.
+	if err := h.store.DisableTOTP(ctx, u.ID, true); !errors.Is(err, store.ErrLastLogin) {
+		t.Fatalf("DisableTOTP(keepOne) = %v", err)
+	}
+	// Where none is required (or an admin resets them), the session is no
+	// longer one that presented a factor.
+	if err := h.store.DisableTOTP(ctx, u.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["restricted"] != true {
+		t.Fatalf("after the last factor went: %v", me)
+	}
 }
