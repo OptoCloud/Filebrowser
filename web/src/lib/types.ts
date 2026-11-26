@@ -28,6 +28,8 @@ export interface OIDCIdentity {
 }
 
 export interface Me {
+  /** The server has snapshots: earlier versions of files can be asked for. */
+  snapshots?: boolean;
   /** Sessions end when used from another browser or network than they started from. */
   session_binding?: boolean;
   /** The server has session binding turned off for everyone. */

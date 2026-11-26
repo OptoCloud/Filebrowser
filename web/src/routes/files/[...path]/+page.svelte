@@ -58,6 +58,12 @@
   let moveOpen = $state(false);
   let shareEntry = $state<Entry | null>(null);
   let confirmDelete = $state(false);
+  // Sizes of the folders here, by name, once asked for (the listing cannot say).
+  let folderSizes = $state<Record<string, number> | null>(null);
+  let sizesPartial = $state(false);
+  // The file whose earlier versions (from snapshots) are shown.
+  let versionsOf = $state<Entry | null>(null);
+  let versions = $state<{ snapshot: string; size: number; mtime: string }[] | null>(null);
   let dragging = $state(0);
 
   let fileInput: HTMLInputElement | undefined = $state();
@@ -91,6 +97,7 @@
       anchor = -1;
       results = null;
       query = '';
+      folderSizes = null;
     });
     // Leaving the folder drops its pending search.
     return () => {
@@ -248,6 +255,32 @@
     if (results !== null) await runSearch();
   }
 
+  async function loadFolderSizes() {
+    actionErr = '';
+    try {
+      const r = await get<{ sizes: Record<string, number>; partial: boolean }>(
+        '/api/files/sizes' + qs({ path })
+      );
+      folderSizes = r.sizes;
+      sizesPartial = r.partial;
+    } catch (e) {
+      actionErr = errorMessage(e);
+    }
+  }
+
+  async function showVersions(e: Entry) {
+    versionsOf = e;
+    versions = null;
+    try {
+      versions = (
+        await get<{ versions: typeof versions }>('/api/files/versions' + qs({ path: e.path }))
+      ).versions;
+    } catch (x) {
+      versionsOf = null;
+      actionErr = errorMessage(x);
+    }
+  }
+
   async function mkdir(e: Event) {
     e.preventDefault();
     const name = newName.trim();
@@ -397,6 +430,9 @@
       <button class="small" onclick={downloadSelection}>
         <Icon name="download" size={16} />Download
       </button>
+      {#if selection.length === 1 && !selection[0].is_dir && page.data.me?.snapshots}
+        <button class="small" onclick={() => showVersions(selection[0])}>Versions</button>
+      {/if}
       {#if canModifySelection}
         {#if selection.length === 1}
           <button
@@ -443,6 +479,15 @@
           <Icon name="share" size={16} />Share folder
         </button>
       {/if}
+    {/if}
+    {#if !selection.length && results === null && entries.some((e) => e.is_dir)}
+      <button
+        class="small"
+        onclick={loadFolderSizes}
+        title="Adds up what each folder holds; large folders take a while"
+      >
+        {folderSizes && sizesPartial ? 'Keep counting' : 'Folder sizes'}
+      </button>
     {/if}
     <span class="spacer"></span>
     <div class="seg">
@@ -554,7 +599,13 @@
                   </span>
                 </a>
               </td>
-              <td class="num muted hide-mobile">{e.is_dir ? '' : formatSize(e.size)}</td>
+              <td class="num muted hide-mobile">
+                {e.is_dir
+                  ? folderSizes && results === null && folderSizes[e.name] !== undefined
+                    ? formatSize(folderSizes[e.name])
+                    : ''
+                  : formatSize(e.size)}
+              </td>
               <td class="muted hide-mobile">{formatDate(e.mtime)}</td>
             </tr>
           {/each}
@@ -660,6 +711,39 @@
     onpick={moveTo}
     onclose={() => (moveOpen = false)}
   />
+{/if}
+
+{#if versionsOf}
+  <Modal title="Earlier versions of “{versionsOf.name}”" onclose={() => (versionsOf = null)}>
+    {#if versions === null}
+      <p class="muted">Looking through the snapshots…</p>
+    {:else if versions.length === 0}
+      <p class="muted">The snapshots hold no other version of this file.</p>
+    {:else}
+      <ul class="plain">
+        {#each versions as v (v.snapshot)}
+          <li class="row small">
+            <span>
+              {formatDate(v.mtime)} · {formatSize(v.size)}
+              <br /><span class="muted">snapshot {v.snapshot}</span>
+            </span>
+            <span class="spacer"></span>
+            <a
+              class="btn small"
+              href={'/api/files/version' + qs({ path: versionsOf.path, snapshot: v.snapshot })}
+              rel="external"
+              download
+            >
+              Download
+            </a>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    {#snippet footer()}
+      <button class="primary" onclick={() => (versionsOf = null)}>Close</button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if shareEntry}

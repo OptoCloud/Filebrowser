@@ -933,3 +933,77 @@ func TestSessionBinding(t *testing.T) {
 	c.ip = "198.51.100.9"
 	expect(t, c.do("GET", "/api/me", nil), 200)
 }
+
+func TestFolderSizes(t *testing.T) {
+	h := newHarness(t)
+	h.user("wes", "user", store.Grant{Path: "wes", Permission: "read"}, store.Grant{Path: "deep/inner", Permission: "read"})
+	write(t, h.root, "wes/a/1.bin", strings.Repeat("x", 100))
+	write(t, h.root, "wes/a/sub/2.bin", strings.Repeat("x", 50))
+	write(t, h.root, "wes/b/3.bin", "xyz")
+	write(t, h.root, "wes/file.txt", "not a folder")
+	write(t, h.root, "deep/inner/x.bin", "12345")
+	write(t, h.root, "deep/secret/y.bin", strings.Repeat("s", 999))
+	c := h.login("wes")
+	got := decode[map[string]any](t, c.do("GET", "/api/files/sizes?path=wes", nil))
+	sizes := got["sizes"].(map[string]any)
+	if sizes["a"] != float64(150) || sizes["b"] != float64(3) || len(sizes) != 2 || got["partial"] != false {
+		t.Fatalf("sizes = %v", got)
+	}
+	// A folder that only leads to a grant is not added up: it holds what the user may not see.
+	if got := decode[map[string]any](t, c.do("GET", "/api/files/sizes?path=", nil)); got["sizes"].(map[string]any)["deep"] != nil {
+		t.Fatalf("root sizes = %v", got)
+	}
+	if got := decode[map[string]any](t, c.do("GET", "/api/files/sizes?path=deep", nil)); got["sizes"].(map[string]any)["inner"] != float64(5) ||
+		got["sizes"].(map[string]any)["secret"] != nil {
+		t.Fatalf("deep sizes = %v", got)
+	}
+	expect(t, c.do("GET", "/api/files/sizes?path=deep/secret", nil), 404)
+}
+
+// Snapshots of files_root offer the earlier versions of a file.
+func TestEarlierVersions(t *testing.T) {
+	h := newHarnessWith(t, func(c *config.Config) { c.SnapshotsDir = "snaps" })
+	h.user("xia", "user", store.Grant{Path: "xia", Permission: "read"})
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	snap := func(name, rel, content string, at time.Time) {
+		write(t, h.root, "snaps/"+name+"/"+rel, content)
+		os.Chtimes(filepath.Join(h.root, "snaps", name, filepath.FromSlash(rel)), at, at)
+	}
+	write(t, h.root, "xia/doc.txt", "version three")
+	snap("2026-01-01", "xia/doc.txt", "version one", old)
+	snap("2026-01-02", "xia/doc.txt", "version one", old) // unchanged that day
+	snap("2026-01-03", "xia/doc.txt", "version two!", old.Add(48*time.Hour))
+	snap("2026-01-03", "xia/gone.txt", "deleted since", old)
+	snap("2026-01-03", "other/secret.txt", "not hers", old)
+	os.Symlink(filepath.Join(h.root, "snaps/2026-01-03/other/secret.txt"), filepath.Join(h.root, "snaps/2026-01-03/xia/link.txt"))
+	c := h.login("xia")
+	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["snapshots"] != true {
+		t.Fatalf("me.snapshots = %v", me["snapshots"])
+	}
+	type versions struct {
+		Versions []struct {
+			Snapshot string
+			Size     int64
+		}
+	}
+	v := decode[versions](t, c.do("GET", "/api/files/versions?path=xia/doc.txt", nil)).Versions
+	if len(v) != 2 || v[0].Snapshot != "2026-01-03" || v[1].Snapshot != "2026-01-02" || v[1].Size != 11 {
+		t.Fatalf("versions = %+v", v)
+	}
+	rec := c.do("GET", "/api/files/version?path=xia/doc.txt&snapshot=2026-01-02", nil)
+	if rec.Code != 200 || rec.Body.String() != "version one" || !strings.Contains(rec.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("version: %d %q %q", rec.Code, rec.Body.String(), rec.Header().Get("Content-Disposition"))
+	}
+	// A file deleted since is still to be had where the user may read.
+	if v := decode[versions](t, c.do("GET", "/api/files/versions?path=xia/gone.txt", nil)).Versions; len(v) != 1 {
+		t.Fatalf("versions of a deleted file = %+v", v)
+	}
+	// Not outside the user's access, by path, by snapshot name or through a link in the snapshot.
+	for _, q := range []string{"path=other/secret.txt&snapshot=2026-01-03", "path=xia/doc.txt&snapshot=../snaps/2026-01-03",
+		"path=xia/doc.txt&snapshot=..", "path=xia/link.txt&snapshot=2026-01-03", "path=xia/doc.txt&snapshot=nope"} {
+		if rec := c.do("GET", "/api/files/version?"+q, nil); rec.Code < 400 {
+			t.Errorf("GET version?%s: %d %q", q, rec.Code, rec.Body.String())
+		}
+	}
+	expect(t, c.do("GET", "/api/files/versions?path=other/secret.txt", nil), 404)
+}

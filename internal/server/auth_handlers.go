@@ -333,6 +333,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"providers":            s.oidc.Providers(),
 		"share_origin":         s.cfg.ShareOrigin,
 	}
+	// Whether earlier versions of files can be asked for.
+	resp["snapshots"] = len(s.snapshots()) > 0
 	if s.r2 != nil {
 		// Files from this size go through the upload bucket.
 		resp["r2_threshold"] = s.cfg.R2.Threshold

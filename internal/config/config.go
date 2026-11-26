@@ -58,6 +58,12 @@ type Config struct {
 	// the pages and in the previews chat apps show for its links.
 	SiteName   string `toml:"site_name"`
 	ThemeColor string `toml:"theme_color"`
+	// SnapshotsDir is where read-only snapshots of files_root are found,
+	// one directory per snapshot, each mirroring files_root: relative to
+	// files_root, ".zfs/snapshot" when files_root is a ZFS dataset. Files in
+	// them are offered as earlier versions. Where the directory does not
+	// exist there are none.
+	SnapshotsDir string `toml:"snapshots_dir"`
 	// MetricsListen is an address (e.g. "127.0.0.1:9101") on which the
 	// server's counters are served at /metrics in the Prometheus format,
 	// without authentication: keep it off the internet. Unset, they are not
@@ -186,6 +192,7 @@ func Default() Config {
 	return Config{
 		Listen:              "127.0.0.1:8080",
 		SiteName:            "filebrowser",
+		SnapshotsDir:        ".zfs/snapshot",
 		CheckPwnedPasswords: true,
 		ThemeColor:          "#2563eb",
 		AppOrigin:           "http://files.localhost:8080",

@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -269,6 +270,26 @@ func (f *FS) UniquePath(p string) (string, error) {
 
 // Size returns the total size of p (recursively for directories), not
 // counting Reserved directories (trash and staged uploads).
+// SizeContext is Size that gives up when ctx is done, reporting whether the
+// whole tree was counted.
+func (f *FS) SizeContext(ctx context.Context, p string) (total int64, whole bool) {
+	whole = true
+	_ = f.walk(p, func(_, name string, fi fs.FileInfo, _ func() (*os.File, error)) error {
+		if ctx.Err() != nil {
+			whole = false
+			return fs.SkipAll
+		}
+		if fi.IsDir() && IsReservedName(name) {
+			return fs.SkipDir
+		}
+		if fi.Mode().IsRegular() {
+			total += fi.Size()
+		}
+		return nil
+	})
+	return total, whole
+}
+
 func (f *FS) Size(p string) (int64, error) {
 	var total int64
 	err := f.walk(p, func(_, name string, fi fs.FileInfo, _ func() (*os.File, error)) error {

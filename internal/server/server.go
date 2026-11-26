@@ -68,6 +68,7 @@ type Server struct {
 	reportLimiter *auth.RateLimiter
 	hooks         *webhooks.Dispatcher
 	passwords     *auth.PasswordPolicy
+	sizes         sizeCache
 	// Metrics counts what the server does (see MetricsListen).
 	Metrics *metrics.Registry
 	// r2 is the upload bucket, or nil when none is configured.

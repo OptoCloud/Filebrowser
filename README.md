@@ -27,6 +27,9 @@ Licensed under the [GNU AGPL v3](LICENSE).
 - Thumbnails, image/audio/video/PDF/text previews, media pipeline (direct play,
   live HLS for video the browser cannot play as is (repackaged, audio converted
   to AAC if needed), WebVTT subtitles, "Open in VLC" signed URLs).
+- Folder sizes on request, and earlier versions of a file from snapshots of
+  `files_root` (ZFS's `.zfs/snapshot`, or any `snapshots_dir`).
+- Prometheus metrics on an internal listener (`metrics_listen`).
 - API tokens scoped to folders and capabilities, and one-request uploads for
   curl, ShareX and the like; signed webhooks on uploads and share use.
 - Admin page: users, grants, quotas, sessions, invites, tokens, audit log.
