@@ -23,7 +23,7 @@ type APIToken struct {
 	RevokedAt  *time.Time `json:"revoked_at"`
 }
 
-const tokenCols = `id, user_id, name, token_hash, hint, paths, caps, allowed_ips, created_at, expires_at, last_used_at, last_used_ip, revoked_at`
+const tokenCols = `id, user_id, name, token_hash, hint, paths, caps, allowed_ips, created_at, expires_at, last_used_at, last_used_ip, revoked_at` // #nosec G101 -- column names
 
 func (s *Store) CreateAPIToken(ctx context.Context, t *APIToken) error {
 	return s.pool.QueryRow(ctx, `INSERT INTO api_tokens (user_id, name, token_hash, hint, paths, caps, allowed_ips, expires_at)

@@ -31,7 +31,7 @@ type PasswordPolicy struct {
 	Client   *http.Client
 }
 
-const pwnedRangeURL = "https://api.pwnedpasswords.com/range/"
+const pwnedRangeURL = "https://api.pwnedpasswords.com/range/" // #nosec G101 -- a public API URL
 
 // common are the usual passwords long enough to pass the length rule.
 var common = map[string]bool{}

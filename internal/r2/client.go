@@ -202,7 +202,7 @@ func (c *Client) Head(ctx context.Context, key string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	return res.ContentLength, nil
 }
 
