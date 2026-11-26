@@ -1,13 +1,14 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import { goto } from '$app/navigation';
+  import { goto, invalidate } from '$app/navigation';
   import { page } from '$app/state';
   import { download, errorMessage, get, post, postForm, qs } from '#lib/api.js';
   import { formatDate, formatSize, parentPath, pathCrumbs } from '#lib/format.js';
-  import { filesHref } from '#lib/nav.js';
+  import { filesHref, previewHref } from '#lib/nav.js';
   import { LatestRequest } from '#lib/latest.js';
-  import type { Entry, Listing } from '#lib/types.js';
+  import type { Entry } from '#lib/types.js';
+  import type { PageProps } from './$types';
   import { appUploader, filesFromDrop, filesFromInput } from '#lib/upload.svelte.js';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import EntryIcon from '#lib/components/EntryIcon.svelte';
@@ -20,10 +21,12 @@
 
   type SortKey = 'name' | 'size' | 'mtime';
 
-  const path = $derived(page.params.path ?? '');
-  let listing = $state<Listing | null>(null);
-  let loading = $state(true);
-  let err = $state('');
+  // The listing comes from the load function (+page.ts), so it is there
+  // before the folder is shown.
+  let { data }: PageProps = $props();
+  const path = $derived(data.path);
+  const listing = $derived(data.listing);
+  const err = $derived(data.loadError);
   let actionErr = $state('');
 
   let view = $state<'list' | 'grid'>(loadPref('fb.view', 'list') as 'list' | 'grid');
@@ -38,8 +41,17 @@
   let searching = $state(false);
   let searchingFor = '';
 
-  // Path of the previewed file (an index would jump when the listing changes).
-  let previewPath = $state<string | null>(null);
+  // Path of the previewed file (an index would jump when the listing
+  // changes). Opening one is a shallow navigation: it adds a history entry
+  // with the file in its state and in the address, without leaving the
+  // listing, so Back closes the preview and the address opens it again.
+  // A history entry without that state is one that was really navigated to,
+  // and its address says what is open.
+  const previewPath = $derived(
+    page.state.preview !== undefined ? page.state.preview : page.url.searchParams.get('preview')
+  );
+  // Whether the preview added a history entry of its own that closing can go back over.
+  let previewPushed = false;
   let mkdirOpen = $state(false);
   let newName = $state('');
   let renameEntry = $state<Entry | null>(null);
@@ -50,8 +62,9 @@
 
   let fileInput: HTMLInputElement | undefined = $state();
   let dirInput: HTMLInputElement | undefined = $state();
+  let searchInput: HTMLInputElement | undefined = $state();
+  let browser: HTMLElement | undefined = $state();
 
-  const listReq = new LatestRequest();
   const searchReq = new LatestRequest();
 
   function loadPref(k: string, d: string): string {
@@ -69,35 +82,18 @@
     }
   }
 
-  async function load(p: string, quiet = false) {
-    const signal = listReq.next();
-    if (!quiet) loading = true;
-    err = '';
-    try {
-      const l = await get<Listing>('/api/files' + qs({ path: p }), { signal });
-      if (signal.aborted) return;
-      listing = l;
-    } catch (e) {
-      if (signal.aborted) return;
-      listing = null;
-      err = errorMessage(e);
-    }
-    loading = false;
-  }
+  const reload = () => invalidate('app:files');
 
   $effect(() => {
-    const p = path;
+    void path;
     untrack(() => {
       selected.clear();
       anchor = -1;
       results = null;
       query = '';
-      previewPath = null;
-      void load(p);
     });
-    // Leaving the folder drops its pending listing and search.
+    // Leaving the folder drops its pending search.
     return () => {
-      listReq.abort();
       searchReq.abort();
       searching = false;
     };
@@ -109,7 +105,7 @@
     const off = appUploader.onFileDone((item) => {
       if (item.dir !== path) return;
       clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => load(path, true), 400);
+      reloadTimer = setTimeout(reload, 400);
     });
     return () => {
       off();
@@ -118,25 +114,26 @@
   });
 
   const writable = $derived(listing?.permission === 'write');
+  const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   const entries = $derived.by(() => {
     const list = results ?? listing?.entries ?? [];
     const dir = sortAsc ? 1 : -1;
+    // Dates are parsed once, not in every comparison: folders can be large.
+    const time = new Map(sortKey === 'mtime' ? list.map((e) => [e, Date.parse(e.mtime)]) : []);
     return [...list].sort((a, b) => {
       if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
       let c = 0;
       if (sortKey === 'size') c = a.size - b.size;
-      else if (sortKey === 'mtime') c = new Date(a.mtime).getTime() - new Date(b.mtime).getTime();
-      if (c === 0)
-        c = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      else if (sortKey === 'mtime') c = (time.get(a) ?? 0) - (time.get(b) ?? 0);
+      if (c === 0) c = byName.compare(a.name, b.name);
       return c * dir;
     });
   });
   const crumbs = $derived(pathCrumbs(path));
   const selection = $derived(entries.filter((e) => selected.has(e.path)));
   // In a traverse-only directory every child is a grant root (or leads to one).
-  const canModifySelection = $derived(
-    selection.length > 0 && (results !== null || listing?.permission === 'write')
-  );
+  const canModify = $derived(results !== null || listing?.permission === 'write');
+  const canModifySelection = $derived(selection.length > 0 && canModify);
 
   function setSort(k: SortKey) {
     if (sortKey === k) sortAsc = !sortAsc;
@@ -147,6 +144,9 @@
     savePref('fb.sort', sortKey);
     savePref('fb.asc', sortAsc ? '1' : '0');
   }
+
+  const ariaSort = (k: SortKey) =>
+    sortKey !== k ? undefined : sortAsc ? ('ascending' as const) : ('descending' as const);
 
   function setView(v: 'list' | 'grid') {
     view = v;
@@ -167,9 +167,74 @@
     else entries.forEach((e) => selected.add(e.path));
   }
 
-  function openEntry(e: Entry) {
-    if (e.is_dir) void goto(filesHref(e.path));
-    else previewPath = e.path;
+  const entryHref = (e: Entry) => (e.is_dir ? filesHref(e.path) : previewHref(path, e.path));
+
+  function showPreview(p: string | null, replace = false) {
+    if (p === null) return closePreview();
+    if (!replace) previewPushed = true;
+    void goto(previewHref(path, p), { replace, shallow: true, state: { preview: p } });
+  }
+
+  function closePreview() {
+    if (previewPath === null) return;
+    if (previewPushed) {
+      previewPushed = false;
+      history.back();
+    } else void goto(filesHref(path), { replace: true, shallow: true, state: { preview: null } });
+  }
+
+  // Entries are links, so they open in a new tab, copy and preload like any
+  // other; a plain click on a file opens its preview over the listing.
+  function onEntryClick(e: Entry, ev: MouseEvent) {
+    if (e.is_dir || ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    showPreview(e.path);
+  }
+
+  // Keyboard: arrows move between entries, Enter opens (they are links),
+  // Space selects, Delete and F2 act, Ctrl+A selects all, / searches.
+  function onkeydown(ev: KeyboardEvent) {
+    const t = ev.target as HTMLElement | null;
+    if (ev.defaultPrevented || !t || !browser || document.querySelector('dialog[open]')) return;
+    const typing =
+      t.isContentEditable ||
+      t.tagName === 'TEXTAREA' ||
+      t.tagName === 'SELECT' ||
+      (t.tagName === 'INPUT' && (t as HTMLInputElement).type !== 'checkbox');
+    if (typing) return;
+    const els = Array.from(browser.querySelectorAll<HTMLElement>('[data-entry]'));
+    const at = els.indexOf(document.activeElement as HTMLElement);
+    const focus = (i: number) => els[Math.max(0, Math.min(els.length - 1, i))]?.focus();
+    // In the grid, up and down move by a row: as many tiles as share the first one's top.
+    const perRow = () => {
+      if (view === 'list' || !els.length) return 1;
+      const top = els[0].getBoundingClientRect().top;
+      const n = els.findIndex((el) => el.getBoundingClientRect().top > top + 1);
+      return n < 0 ? els.length : n;
+    };
+    let handled = true;
+    if (ev.key === '/') searchInput?.focus();
+    else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'a')
+      entries.forEach((e) => selected.add(e.path));
+    else if (ev.ctrlKey || ev.metaKey || ev.altKey) handled = false;
+    else if (ev.key === 'ArrowDown') focus(at < 0 ? 0 : at + perRow());
+    else if (ev.key === 'ArrowUp') focus(at < 0 ? 0 : at - perRow());
+    else if (ev.key === 'ArrowRight' && view === 'grid') focus(at + 1);
+    else if (ev.key === 'ArrowLeft' && view === 'grid') focus(at - 1);
+    else if (ev.key === 'Home') focus(0);
+    else if (ev.key === 'End') focus(els.length - 1);
+    else if (ev.key === ' ' && at >= 0) toggle(entries[at], at, ev);
+    else if (ev.key === 'Escape' && selected.size) selected.clear();
+    else if ((ev.key === 'Delete' || ev.key === 'F2') && canModify) {
+      // On the selection, or else on the entry the keyboard is at.
+      if (!selected.size && at >= 0) selected.add(entries[at].path);
+      if (ev.key === 'Delete' && selected.size) confirmDelete = true;
+      else if (ev.key === 'F2' && selected.size === 1) {
+        renameEntry = entries.find((e) => selected.has(e.path)) ?? null;
+        newName = renameEntry?.name ?? '';
+      } else handled = false;
+    } else handled = false;
+    if (handled) ev.preventDefault();
   }
 
   async function act(fn: () => Promise<unknown>) {
@@ -179,7 +244,7 @@
     } catch (e) {
       actionErr = errorMessage(e);
     }
-    await load(path, true);
+    await reload();
     if (results !== null) await runSearch();
   }
 
@@ -290,10 +355,13 @@
 
 <svelte:head><title>{crumbs.at(-1)?.name ?? 'Files'}</title></svelte:head>
 
+<svelte:window {onkeydown} />
+
 <div
   class="browser"
   role="region"
   aria-label="File browser"
+  bind:this={browser}
   ondragenter={onDragEnter}
   ondragover={onDragOver}
   ondragleave={onDragLeave}
@@ -309,7 +377,14 @@
       {#if listing?.permission === 'read'}<span class="badge">read-only</span>{/if}
     </nav>
     <form class="search" onsubmit={runSearch}>
-      <input type="search" placeholder="Search names…" bind:value={query} aria-label="Search" />
+      <input
+        type="search"
+        placeholder="Search names…"
+        bind:value={query}
+        bind:this={searchInput}
+        aria-label="Search"
+        aria-keyshortcuts="/"
+      />
       <button class="icon" aria-label="Search" disabled={searching}>
         <Icon name="search" size={18} />
       </button>
@@ -376,6 +451,7 @@
         class:on={view === 'list'}
         onclick={() => setView('list')}
         aria-label="List view"
+        aria-pressed={view === 'list'}
       >
         <Icon name="list" size={18} />
       </button>
@@ -384,6 +460,7 @@
         class:on={view === 'grid'}
         onclick={() => setView('grid')}
         aria-label="Grid view"
+        aria-pressed={view === 'grid'}
       >
         <Icon name="grid" size={18} />
       </button>
@@ -400,7 +477,7 @@
   />
 
   {#if results !== null}
-    <div class="notice row">
+    <div class="notice row" role="status">
       <span>
         {results.length} result{results.length === 1 ? '' : 's'} for "{query}"{truncated
           ? ' (truncated)'
@@ -410,12 +487,10 @@
       <button class="small" onclick={clearSearch}>Clear search</button>
     </div>
   {/if}
-  {#if actionErr}<div class="error">{actionErr}</div>{/if}
+  {#if actionErr}<div class="error" role="alert">{actionErr}</div>{/if}
 
-  {#if loading && !listing}
-    <p class="muted pad">Loading…</p>
-  {:else if err}
-    <div class="error">{err}</div>
+  {#if err}
+    <div class="error" role="alert">{err}</div>
   {:else if entries.length === 0}
     <div class="empty muted">
       {#if results !== null}No matches.{:else if writable}This folder is empty. Drop files here to
@@ -434,17 +509,17 @@
                 aria-label="Select all"
               />
             </th>
-            <th>
+            <th aria-sort={ariaSort('name')}>
               <button class="ghost small sort" onclick={() => setSort('name')}>
                 Name {sortKey === 'name' ? (sortAsc ? '▲' : '▼') : ''}
               </button>
             </th>
-            <th class="num hide-mobile">
+            <th class="num hide-mobile" aria-sort={ariaSort('size')}>
               <button class="ghost small sort" onclick={() => setSort('size')}>
                 Size {sortKey === 'size' ? (sortAsc ? '▲' : '▼') : ''}
               </button>
             </th>
-            <th class="hide-mobile">
+            <th class="hide-mobile" aria-sort={ariaSort('mtime')}>
               <button class="ghost small sort" onclick={() => setSort('mtime')}>
                 Modified {sortKey === 'mtime' ? (sortAsc ? '▲' : '▼') : ''}
               </button>
@@ -463,7 +538,13 @@
                 />
               </td>
               <td>
-                <button class="name ghost" onclick={() => openEntry(e)}>
+                <a
+                  class="name"
+                  href={entryHref(e)}
+                  data-entry
+                  data-sveltekit-reset={e.is_dir ? undefined : 'false'}
+                  onclick={(ev) => onEntryClick(e, ev)}
+                >
                   <EntryIcon entry={e} />
                   <span class="label">
                     {e.name}
@@ -471,7 +552,7 @@
                         {parentPath(e.path) || 'Home'}
                       </span>{/if}
                   </span>
-                </button>
+                </a>
               </td>
               <td class="num muted hide-mobile">{e.is_dir ? '' : formatSize(e.size)}</td>
               <td class="muted hide-mobile">{formatDate(e.mtime)}</td>
@@ -504,10 +585,17 @@
             onclick={(ev) => toggle(e, i, ev)}
             aria-label={'Select ' + e.name}
           />
-          <button class="ghost tbtn" onclick={() => openEntry(e)} title={e.name}>
+          <a
+            class="tbtn"
+            href={entryHref(e)}
+            title={e.name}
+            data-entry
+            data-sveltekit-reset={e.is_dir ? undefined : 'false'}
+            onclick={(ev) => onEntryClick(e, ev)}
+          >
             <EntryThumb entry={e} src={'/api/thumb' + qs({ path: e.path, v: e.mtime })} />
             <div class="tname">{e.name}</div>
-          </button>
+          </a>
         </div>
       {/each}
     </div>
@@ -524,7 +612,11 @@
 </div>
 
 {#if previewPath !== null}
-  <Preview {entries} bind:path={previewPath} onclose={() => (previewPath = null)} />
+  <Preview
+    {entries}
+    bind:path={() => previewPath, (p) => showPreview(p, true)}
+    onclose={closePreview}
+  />
 {/if}
 
 {#if mkdirOpen}
@@ -593,7 +685,7 @@
     max-width: 1200px;
     margin: 0 auto;
     padding: 1rem 1rem 6rem;
-    min-height: calc(100vh - 60px);
+    min-height: calc(100dvh - 60px);
     position: relative;
   }
   .toolbar {
@@ -663,11 +755,16 @@
     background: var(--accent-soft);
   }
   .name {
-    width: 100%;
-    justify-content: flex-start;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     padding: 0.35rem 0.2rem;
-    text-align: left;
-    white-space: normal;
+    border-radius: var(--radius);
+    color: var(--text);
+    text-decoration: none;
+  }
+  .name:hover {
+    background: var(--surface-2);
   }
   .name .label {
     display: flex;
@@ -679,9 +776,6 @@
     padding: 4rem 1rem;
     border: 2px dashed var(--border);
     border-radius: var(--radius);
-  }
-  .pad {
-    padding: 1rem;
   }
   .grid {
     display: grid;
@@ -709,11 +803,20 @@
   }
   .tbtn {
     display: block;
-    width: 100%;
-    padding: 0;
-    border: none;
-    border-radius: 0;
-    white-space: normal;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .tbtn:focus-visible {
+    outline-offset: -2px;
+  }
+  /* Rows far below the fold are not laid out until scrolled near. */
+  .files tbody tr {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 2.6rem;
+  }
+  .tile {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 190px;
   }
   .tname {
     padding: 0.4rem 0.5rem;

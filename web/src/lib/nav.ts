@@ -28,6 +28,11 @@ export function filesHref(path: string): ResolvedPathname {
   return resolve('/files/[...path]', { path: path.split('/').map(encodeURIComponent).join('/') });
 }
 
+/** The /files page of a folder with the preview of one of its files (a full path) open. */
+export function previewHref(dir: string, file: string): ResolvedPathname {
+  return `${filesHref(dir)}?${new URLSearchParams({ preview: file })}` as ResolvedPathname;
+}
+
 /** The share page for a token, optionally at a subfolder of the share. */
 export function shareHref(token: string, path = ''): ResolvedPathname {
   const href = resolve('/s/[token]', { token: encodeURIComponent(token) });

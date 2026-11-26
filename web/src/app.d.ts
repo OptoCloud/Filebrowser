@@ -7,6 +7,10 @@ declare global {
       /** The logged-in user (null on public pages), from the root layout. */
       me: Me | null;
     }
+    interface PageState {
+      /** Files page: the path of the file whose preview is open (null: closed). */
+      preview?: string | null;
+    }
   }
 }
 export {};
