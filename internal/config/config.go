@@ -58,6 +58,10 @@ type Config struct {
 	// the pages and in the previews chat apps show for its links.
 	SiteName   string `toml:"site_name"`
 	ThemeColor string `toml:"theme_color"`
+	// SecurityContact is where to report a vulnerability: a mailto: or
+	// https: address, published as /.well-known/security.txt. Unset, there
+	// is no such file.
+	SecurityContact string `toml:"security_contact"`
 
 	Session Session `toml:"session"`
 	Trash   Trash   `toml:"trash"`
@@ -279,6 +283,9 @@ func (c Config) Validate() error {
 		if c.R2.PartSize < 5<<20 || c.R2.PartSize > 5<<30 || c.R2.Threshold < 0 || c.R2.MaxPendingBytes <= 0 {
 			errs = append(errs, errors.New("r2.part_size must be 5 MiB to 5 GiB, threshold not negative and max_pending_bytes positive"))
 		}
+	}
+	if c.SecurityContact != "" && !strings.HasPrefix(c.SecurityContact, "mailto:") && !strings.HasPrefix(c.SecurityContact, "https://") {
+		errs = append(errs, errors.New("security_contact must start with mailto: or https://"))
 	}
 	if c.FilesRoot == "" {
 		errs = append(errs, errors.New("files_root is required"))

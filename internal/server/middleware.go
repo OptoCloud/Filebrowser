@@ -103,6 +103,12 @@ func (s *Server) csrf(origin string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// A browser's own report of a policy violation changes nothing and
+		// comes without an Origin.
+		if r.URL.Path == cspReportPath {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// An API token is not sent by a browser on a page's behalf the way
 		// a cookie is, so there is no request to forge; guard then acts on
 		// the token alone.

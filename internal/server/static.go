@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"html"
 	"io/fs"
 	"net/http"
@@ -90,6 +91,8 @@ func newStatic(fsys fs.FS, cfg config.Config) (*static, error) {
 	if !ok {
 		return nil, errors.New("index.html has no </head>")
 	}
+	// Violations are reported to the server, which logs them (handleCSPReport).
+	common += "; report-uri " + cspReportPath
 	return &static{
 		fsys:     fsys,
 		head:     head,
@@ -100,6 +103,9 @@ func newStatic(fsys fs.FS, cfg config.Config) (*static, error) {
 		cfg:      cfg,
 	}, nil
 }
+
+// cspReportPath takes the browsers' reports of policy violations, on both origins.
+const cspReportPath = "/_csp-report"
 
 const robots = "User-agent: *\nDisallow: /\n"
 
@@ -113,6 +119,17 @@ func (st *static) serve(w http.ResponseWriter, r *http.Request, share bool) {
 	if p == "/robots.txt" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(robots))
+		return
+	}
+	if p == "/.well-known/security.txt" {
+		if st.cfg.SecurityContact == "" {
+			http.NotFound(w, r)
+			return
+		}
+		// RFC 9116. It has to say until when it holds: a year from each asking.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = fmt.Fprintf(w, "Contact: %s\nExpires: %s\n", st.cfg.SecurityContact,
+			time.Now().AddDate(1, 0, 0).UTC().Format("2006-01-02T15:04:05Z"))
 		return
 	}
 	name := strings.TrimPrefix(p, "/")
@@ -155,6 +172,12 @@ func (st *static) serve(w http.ResponseWriter, r *http.Request, share bool) {
 	} else {
 		h.Set("Content-Security-Policy", st.appCSP)
 	}
+	// Not enforced yet, only reported: with Trusted Types, text can become
+	// markup or script only through a named policy (Svelte's own for the one
+	// {@html} in the app). The reports show what else would need one before
+	// this can be made to hold.
+	h.Set("Content-Security-Policy-Report-Only",
+		"require-trusted-types-for 'script'; trusted-types svelte-trusted-html 'allow-duplicates'; report-uri "+cspReportPath)
 	// The page differs by link, so it carries no validator to be cached under.
 	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(st.page(c, origin)))
 }

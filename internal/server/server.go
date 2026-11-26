@@ -62,7 +62,9 @@ type Server struct {
 	shareLimiter *auth.RateLimiter
 	dropLimiter  *auth.RateLimiter
 	tokenLimiter *auth.RateLimiter
-	hooks        *webhooks.Dispatcher
+	// reportLimiter bounds the policy violation reports logged per client.
+	reportLimiter *auth.RateLimiter
+	hooks         *webhooks.Dispatcher
 	// r2 is the upload bucket, or nil when none is configured.
 	r2           *uploads.R2
 	inviteLimit  *auth.RateLimiter
@@ -146,6 +148,7 @@ func New(d Deps) (*Server, error) {
 		// files is many in a short time.
 		dropLimiter:   auth.NewRateLimiter(600, 1200),
 		tokenLimiter:  auth.NewRateLimiter(30, 60),
+		reportLimiter: auth.NewRateLimiter(10, 20),
 		inviteLimit:   auth.NewRateLimiter(10, 20),
 		passkeyLimit:  auth.NewRateLimiter(30, 30),
 		ceremonyLimit: auth.NewRateLimiter(20, 20),

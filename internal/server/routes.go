@@ -113,6 +113,8 @@ func (s *Server) routes() {
 	s.handle("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not found")
 	})
+	s.appMux.HandleFunc("POST "+cspReportPath, s.handleCSPReport)
+	s.shareMux.HandleFunc("POST "+cspReportPath, s.handleCSPReport)
 	// The SPA shell and its assets are public; all data comes from /api.
 	s.appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { s.static.serve(w, r, false) })
 

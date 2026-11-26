@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"filebrowser/internal/auth"
+	"filebrowser/internal/config"
 	"filebrowser/internal/files"
 	"filebrowser/internal/store"
 	"filebrowser/internal/uploads"
@@ -834,5 +835,29 @@ func TestOneRequestUploads(t *testing.T) {
 	link, _ := decode[map[string]any](t, rec)["url"].(string)
 	if rec := h.share().do("GET", strings.TrimPrefix(link, shareOrigin)+"/file", nil); rec.Code != 200 || rec.Body.String() != "shot" {
 		t.Fatalf("shared upload: %d %q (%s)", rec.Code, rec.Body.String(), link)
+	}
+}
+
+func TestSecurityTxtAndPolicyReports(t *testing.T) {
+	h := newHarness(t)
+	expect(t, h.app().do("GET", "/.well-known/security.txt", nil), 404)
+	h = newHarnessWith(t, func(c *config.Config) { c.SecurityContact = "mailto:security@example.com" })
+	for _, c := range []*client{h.app(), h.share()} {
+		rec := c.do("GET", "/.well-known/security.txt", nil)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Contact: mailto:security@example.com\n") ||
+			!strings.Contains(rec.Body.String(), "Expires: ") {
+			t.Fatalf("security.txt: %d %q", rec.Code, rec.Body.String())
+		}
+		// A browser's report comes with no Origin and no session.
+		c.origin = ""
+		expect(t, c.do("POST", "/_csp-report", []byte(`{"csp-report":{"effective-directive":"script-src","blocked-uri":"inline"}}`)), 204)
+		expect(t, c.do("POST", "/_csp-report", []byte(`not json`)), 204)
+	}
+	page := h.app().do("GET", "/login", nil)
+	if csp := page.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "report-uri /_csp-report") {
+		t.Errorf("CSP = %q", csp)
+	}
+	if ro := page.Header().Get("Content-Security-Policy-Report-Only"); !strings.Contains(ro, "require-trusted-types-for 'script'") {
+		t.Errorf("report-only CSP = %q", ro)
 	}
 }
