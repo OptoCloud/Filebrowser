@@ -32,6 +32,8 @@ type Service struct {
 	probes flights[*Probe]
 	thumbs flights[string]
 	subs   flights[string]
+	// noThumb holds the files a thumbnail could not be made for.
+	noThumb failures
 	// thumbSem bounds pure-Go image decoding (memory heavy).
 	thumbSem chan struct{}
 

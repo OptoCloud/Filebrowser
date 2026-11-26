@@ -3,6 +3,7 @@ package media
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -40,5 +41,26 @@ func TestStaleCacheEviction(t *testing.T) {
 	s.evictStale()
 	if _, err := os.Stat(old); err != nil {
 		t.Error("second sweep ran within a day")
+	}
+}
+
+func TestFailuresAreRemembered(t *testing.T) {
+	var f failures
+	if f.has("a") {
+		t.Fatal("empty set has a")
+	}
+	f.add("a")
+	if !f.has("a") || f.has("b") {
+		t.Fatal("a failure is not remembered by its key")
+	}
+	f.at["a"] = f.at["a"].Add(-2 * failureTTL)
+	if f.has("a") {
+		t.Fatal("a failure is remembered past its time")
+	}
+	for i := range failureMax + 5 {
+		f.add(strconv.Itoa(i))
+	}
+	if len(f.at) > failureMax {
+		t.Fatalf("%d failures kept", len(f.at))
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	_ "golang.org/x/image/bmp"
 	"golang.org/x/image/draw"
@@ -60,7 +62,10 @@ func (s *Service) Thumbnail(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	key := cacheKey(path, fi, "thumb")
-	return s.thumbs.do(ctx, key, func(ctx context.Context) (string, error) {
+	if s.noThumb.has(key) {
+		return "", ErrNoThumbnail
+	}
+	p, err := s.thumbs.do(ctx, key, func(ctx context.Context) (string, error) {
 		out, err := s.cachePath("thumbs", key, ".jpg")
 		if err != nil {
 			return "", err
@@ -79,6 +84,55 @@ func (s *Service) Thumbnail(ctx context.Context, path string) (string, error) {
 		}
 		return out, err
 	})
+	// A file that cannot be thumbnailed is not tried again for a while, or
+	// every listing of its folder would decode it or run ffmpeg on it anew.
+	// (Not when the request was given up: ffmpeg was then stopped, not defeated.)
+	if errors.Is(err, ErrNoThumbnail) && ctx.Err() == nil {
+		s.noThumb.add(key)
+	}
+	return p, err
+}
+
+// failures remembers, for a time, the files (by cache key: path, size and
+// modification time) that something could not be made for.
+type failures struct {
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+const (
+	failureTTL = time.Hour
+	failureMax = 10000
+)
+
+func (f *failures) has(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.at[key]
+	if ok && time.Since(t) > failureTTL {
+		delete(f.at, key)
+		return false
+	}
+	return ok
+}
+
+func (f *failures) add(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.at == nil {
+		f.at = map[string]time.Time{}
+	}
+	if len(f.at) >= failureMax {
+		for k, t := range f.at {
+			if time.Since(t) > failureTTL {
+				delete(f.at, k)
+			}
+		}
+		if len(f.at) >= failureMax {
+			clear(f.at) // all recent: start over rather than grow
+		}
+	}
+	f.at[key] = time.Now()
 }
 
 func (s *Service) thumbImage(ctx context.Context, path, out string) error {
