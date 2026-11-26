@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sync"
@@ -48,6 +49,9 @@ type OIDCIdentity struct {
 	LinkUserID int64
 	// LinkSession is the hash of the session that asked for the link.
 	LinkSession []byte
+	// MFA reports a login the provider is trusted to have asked a second
+	// factor for (trust_mfa, and the token's amr or acr where configured).
+	MFA bool
 }
 
 type oidcState struct {
@@ -63,6 +67,10 @@ type oidcState struct {
 func NewOIDC(cfgs []config.OIDC, appOrigin string, keys *Keys, secure bool) *OIDC {
 	o := &OIDC{keys: keys, secure: secure, redirect: appOrigin + "/api/auth/oidc/callback", providers: map[string]*oidcProvider{}}
 	for _, c := range cfgs {
+		if c.TrustMFA && len(c.MFAAmr) == 0 && len(c.MFAAcr) == 0 {
+			slog.Warn("oidc provider is trusted for two-factor authentication without mfa_amr or mfa_acr: "+
+				"every login through it counts as one, whether or not the provider asked for a second factor", "provider", c.ID)
+		}
 		o.providers[c.ID] = &oidcProvider{cfg: c}
 		o.order = append(o.order, c.ID)
 	}
@@ -82,10 +90,25 @@ func (o *OIDC) Providers() []OIDCProviderInfo {
 	return out
 }
 
-// TrustMFA reports whether logins via the provider satisfy the TOTP requirement.
-func (o *OIDC) TrustMFA(id string) bool {
-	p := o.providers[id]
-	return p != nil && p.cfg.TrustMFA
+// usedMFA reports whether a login with these ID token claims satisfies the
+// second-factor requirement by itself.
+func usedMFA(cfg config.OIDC, claims map[string]any) bool {
+	if !cfg.TrustMFA {
+		return false
+	}
+	if len(cfg.MFAAmr) == 0 && len(cfg.MFAAcr) == 0 {
+		return true
+	}
+	if acr, _ := claims["acr"].(string); acr != "" && slices.Contains(cfg.MFAAcr, acr) {
+		return true
+	}
+	amr, _ := claims["amr"].([]any)
+	for _, m := range amr {
+		if s, _ := m.(string); slices.Contains(cfg.MFAAmr, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *oidcProvider) init(ctx context.Context, redirect string) error {
@@ -221,5 +244,6 @@ func (o *OIDC) Callback(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		}
 	}
 	username, _ := claims["preferred_username"].(string)
-	return &OIDCIdentity{Provider: st.Provider, Issuer: idt.Issuer, Subject: idt.Subject, Username: username, LinkUserID: st.Link, LinkSession: st.Session}, nil
+	return &OIDCIdentity{Provider: st.Provider, Issuer: idt.Issuer, Subject: idt.Subject, Username: username, LinkUserID: st.Link, LinkSession: st.Session,
+		MFA: usedMFA(p.cfg, claims)}, nil
 }

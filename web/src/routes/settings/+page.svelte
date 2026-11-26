@@ -38,6 +38,18 @@
   let pwMsg = $state('');
   let pwErr = $state('');
 
+  // Linking starts with a request of ours, which answers with the provider's
+  // sign-in page to go to.
+  async function linkProvider(provider: string) {
+    pageErr = '';
+    try {
+      const r = await post<{ url: string }>('/api/me/oidc/link', { provider });
+      location.assign(r.url);
+    } catch (x) {
+      pageErr = errorMessage(x);
+    }
+  }
+
   async function changePassword(e: Event) {
     e.preventDefault();
     pwErr = pwMsg = '';
@@ -241,13 +253,7 @@
         {/if}
         <div class="row">
           {#each me.providers as p (p.id)}
-            <a
-              class="btn small"
-              href={'/api/auth/oidc/start?provider=' + encodeURIComponent(p.id) + '&link=1'}
-              rel="external"
-            >
-              Link {p.name}
-            </a>
+            <button class="small" onclick={() => linkProvider(p.id)}>Link {p.name}</button>
           {/each}
         </div>
       </div>

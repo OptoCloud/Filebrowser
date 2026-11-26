@@ -37,6 +37,7 @@ func (s *Server) routes() {
 	s.handle("POST /api/me/password", s.handleChangePassword)
 	s.handle("GET /api/me/sessions", s.handleMySessions)
 	s.handle("DELETE /api/me/sessions/{id}", s.handleDeleteMySession)
+	s.handle("POST /api/me/oidc/link", s.handleOIDCLink)
 	s.handle("POST /api/me/oidc/unlink", s.handleOIDCUnlink)
 	s.handle("DELETE /api/me/webauthn/{id}", s.handleWebAuthnDelete)
 

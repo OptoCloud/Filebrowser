@@ -69,6 +69,10 @@
     return () => keyReq.abort();
   });
 
+  // After a login provider the pending login is in a cookie, which the
+  // browser sends by itself; the address only says "cookie".
+  const sentToken = () => (mfaToken === 'cookie' ? '' : mfaToken);
+
   function startMfa(token: string, list: Method[]) {
     mfaToken = token;
     methods = list;
@@ -143,7 +147,7 @@
     busy = true;
     err = '';
     try {
-      await post('/api/auth/login/totp', { token: mfaToken, code: code.replace(/\s/g, '') });
+      await post('/api/auth/login/totp', { token: sentToken(), code: code.replace(/\s/g, '') });
       await done();
     } catch (x) {
       err = errorMessage(x);
@@ -180,7 +184,7 @@
     keyTried = true;
     void ceremony(
       '/api/auth/login/webauthn/begin',
-      { token: mfaToken },
+      { token: sentToken() },
       '/api/auth/login/webauthn/finish'
     );
   }

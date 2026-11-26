@@ -414,12 +414,17 @@ func TestOIDCLinkNeedsFreshLiveSession(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	u := h.user("jan", "user", store.Grant{Path: "jan", Permission: "read"})
-	rec := h.session(u, time.Hour).do("GET", "/api/auth/oidc/start?provider=x&link=1", nil)
-	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "reauth_required") {
-		t.Fatalf("old session could start a link: %d %s", rec.Code, rec.Header().Get("Location"))
+	link := map[string]string{"provider": "x"}
+	rec := h.session(u, time.Hour).do("POST", "/api/me/oidc/link", link)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "reauth_required") {
+		t.Fatalf("old session could start a link: %d %s", rec.Code, rec.Body.String())
 	}
 	// A fresh session gets as far as the (unconfigured) provider.
-	expect(t, h.session(u, time.Minute).do("GET", "/api/auth/oidc/start?provider=x&link=1", nil), 400)
+	expect(t, h.session(u, time.Minute).do("POST", "/api/me/oidc/link", link), 400)
+	// Starting a link is not something a followed link can do.
+	if rec := h.session(u, time.Minute).do("GET", "/api/auth/oidc/start?provider=x&link=1", nil); rec.Code != 400 || rec.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("GET start with link=1: %d %q", rec.Code, rec.Header().Get("Set-Cookie"))
+	}
 
 	hash := h.srv.keys.HashToken("link-session")
 	now := time.Now()
@@ -599,5 +604,25 @@ func TestLastFactorRemoval(t *testing.T) {
 	}
 	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["restricted"] != true {
 		t.Fatalf("after the last factor went: %v", me)
+	}
+}
+
+// After a login provider, the pending login awaiting a second factor is in
+// a cookie, not in the address.
+func TestPendingLoginFromCookie(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("nia", "user", store.Grant{Path: "nia", Permission: "read"})
+	if err := h.store.EnableTOTP(context.Background(), u.ID, []byte("enc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	c := h.app()
+	body := map[string]string{"token": "", "code": "000000"}
+	if rec := c.do("POST", "/api/auth/login/totp", body); !strings.Contains(rec.Body.String(), "login_expired") {
+		t.Fatalf("without a pending login: %d %s", rec.Code, rec.Body.String())
+	}
+	c.cookies["fb_pending"] = &http.Cookie{Name: "fb_pending", Value: h.srv.pending.add(u.ID, "oidc")}
+	rec := c.do("POST", "/api/auth/login/totp", body)
+	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "login_expired") {
+		t.Fatalf("pending login from the cookie: %d %s", rec.Code, rec.Body.String())
 	}
 }

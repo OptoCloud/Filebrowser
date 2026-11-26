@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"filebrowser/internal/config"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -183,5 +184,28 @@ func TestPasskeyFloodKeepsOtherCeremonies(t *testing.T) {
 	}
 	if c, err := w.Take(login, CeremonyLogin); err != nil || c.UserID != 1 {
 		t.Fatalf("second-factor ceremony lost: %v", err)
+	}
+}
+
+func TestOIDCUsedMFA(t *testing.T) {
+	claims := map[string]any{"amr": []any{"pwd", "otp"}, "acr": "urn:silver"}
+	for _, tc := range []struct {
+		cfg  config.OIDC
+		want bool
+	}{
+		{config.OIDC{}, false},
+		{config.OIDC{MFAAmr: []string{"otp"}}, false}, // not trusted at all
+		{config.OIDC{TrustMFA: true}, true},
+		{config.OIDC{TrustMFA: true, MFAAmr: []string{"mfa", "otp"}}, true},
+		{config.OIDC{TrustMFA: true, MFAAmr: []string{"hwk"}}, false},
+		{config.OIDC{TrustMFA: true, MFAAcr: []string{"urn:gold"}}, false},
+		{config.OIDC{TrustMFA: true, MFAAmr: []string{"hwk"}, MFAAcr: []string{"urn:silver"}}, true},
+	} {
+		if got := usedMFA(tc.cfg, claims); got != tc.want {
+			t.Errorf("usedMFA(%+v) = %v", tc.cfg, got)
+		}
+	}
+	if usedMFA(config.OIDC{TrustMFA: true, MFAAmr: []string{"otp"}}, map[string]any{"amr": "otp"}) {
+		t.Error("a malformed amr claim was accepted")
 	}
 }

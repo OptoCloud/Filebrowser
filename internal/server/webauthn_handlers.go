@@ -87,6 +87,7 @@ func (s *Server) handleLoginWebAuthnBegin(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ctx := r.Context()
+	req.Token = s.pendingToken(r, req.Token)
 	pl := s.pending.peek(req.Token)
 	if pl == nil {
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
@@ -167,6 +168,7 @@ func (s *Server) handleLoginWebAuthnFinish(w http.ResponseWriter, r *http.Reques
 	}
 	guess.Reset()
 	s.pending.done(c.Pending)
+	auth.ClearCookie(w, s.pendingCookie(), s.sessions.Secure, http.SameSiteStrictMode)
 	if s.startSession(w, r, user.ID, pl.method, true) {
 		s.audit.LogUser(ctx, &user.ID, audit.LoginOK, user.Username, map[string]any{"method": pl.method, "webauthn": true})
 		httpx.OK(w)

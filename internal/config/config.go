@@ -125,6 +125,12 @@ type OIDC struct {
 	GroupsClaim     string   `toml:"groups_claim"`
 	// TrustMFA treats OIDC logins as satisfying the TOTP requirement.
 	TrustMFA bool `toml:"trust_mfa"`
+	// MFAAmr and MFAAcr narrow TrustMFA to logins the provider says used a
+	// second factor: one whose ID token has any of these values in its "amr"
+	// claim (e.g. "mfa", "otp", "hwk") or this "acr". Without either, every
+	// login through the provider is trusted, whatever it took.
+	MFAAmr []string `toml:"mfa_amr"`
+	MFAAcr []string `toml:"mfa_acr"`
 }
 
 func Default() Config {

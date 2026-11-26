@@ -222,6 +222,25 @@ func (s *Server) verifyTOTP(r *http.Request, user *store.User, code string) bool
 	return err == nil && ok
 }
 
+func (s *Server) pendingCookie() string {
+	if s.sessions.Secure {
+		return "__Host-pending"
+	}
+	return "fb_pending"
+}
+
+// pendingToken is the pending login a second-factor request is for: the one
+// it names (after a password) or the one in the cookie (after a login
+// provider).
+func (s *Server) pendingToken(r *http.Request, named string) string {
+	if named == "" {
+		if c, err := r.Cookie(s.pendingCookie()); err == nil {
+			return c.Value
+		}
+	}
+	return named
+}
+
 func totpAD(userID int64) []byte { return []byte("totp:" + strconv.FormatInt(userID, 10)) }
 
 func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +252,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	req.Token = s.pendingToken(r, req.Token)
 	pl := s.pending.attempt(req.Token)
 	if pl == nil {
 		httpx.ErrorCode(w, http.StatusUnauthorized, "login_expired", "login expired, start again")
@@ -257,6 +277,7 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	guess.Reset()
 	s.pending.done(req.Token)
+	auth.ClearCookie(w, s.pendingCookie(), s.sessions.Secure, http.SameSiteStrictMode)
 	if !s.startSession(w, r, user.ID, pl.method, true) {
 		return
 	}
@@ -551,32 +572,36 @@ func (s *Server) handleDeleteMySession(w http.ResponseWriter, r *http.Request) {
 // OIDC
 
 func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
-	var link int64
-	var session []byte
-	if r.URL.Query().Get("link") == "1" {
-		id, ok := s.authenticate(w, r)
-		if !ok {
-			return
-		}
-		if s.isRestricted(id) {
-			httpx.Error(w, http.StatusForbidden, "forbidden")
-			return
-		}
-		// A linked identity is a sign-in method like a passkey: a stolen
-		// session must not be able to add one (see requireFreshLogin). This
-		// is a page navigation, so the refusal is a redirect.
-		if time.Since(id.Session.CreatedAt) > freshLogin {
-			http.Redirect(w, r, "/settings?error=reauth_required", http.StatusFound)
-			return
-		}
-		link, session = id.User.ID, id.Session.IDHash
-	}
-	u, err := s.oidc.Start(r.Context(), w, r.URL.Query().Get("provider"), link, session)
+	u, err := s.oidc.Start(r.Context(), w, r.URL.Query().Get("provider"), 0, nil)
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "login provider unavailable")
 		return
 	}
 	http.Redirect(w, r, u, http.StatusFound) // #nosec G710 nosemgrep -- u is the provider authorization URL built from server config
+}
+
+// handleOIDCLink starts linking a login provider's identity to the account.
+// It changes state (the link in progress), so it is a POST that answers with
+// the address to go to, not a link that can be followed from anywhere.
+func (s *Server) handleOIDCLink(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	id := httpx.IdentityFrom(r.Context())
+	// A linked identity is a sign-in method like a passkey: a stolen
+	// session must not be able to add one (see requireFreshLogin).
+	if !requireFreshLogin(w, id) {
+		return
+	}
+	u, err := s.oidc.Start(r.Context(), w, req.Provider, id.User.ID, id.Session.IDHash)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "login provider unavailable")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"url": u})
 }
 
 func (s *Server) loginRedirect(w http.ResponseWriter, r *http.Request, errCode string) {
@@ -620,15 +645,18 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		s.loginRedirect(w, r, "oidc_not_linked")
 		return
 	}
-	trust := s.oidc.TrustMFA(ident.Provider)
+	trust := ident.MFA
 	totp, keys, err := s.secondFactors(ctx, user)
 	if err != nil {
 		httpx.InternalError(w, r, err)
 		return
 	}
 	if !trust && (totp || keys > 0) {
-		tok := s.pending.add(user.ID, "oidc")
-		http.Redirect(w, r, "/login?mfa="+url.QueryEscape(tok)+"&methods="+strings.Join(methods(totp, keys), ","), http.StatusFound)
+		// The pending login goes in a cookie, not in the address, where it
+		// would stay in the browser's history.
+		auth.SetCookie(w, auth.Cookie{Name: s.pendingCookie(), Value: s.pending.add(user.ID, "oidc"), MaxAge: 300,
+			SameSite: http.SameSiteStrictMode}, s.sessions.Secure)
+		http.Redirect(w, r, "/login?mfa=cookie&methods="+strings.Join(methods(totp, keys), ","), http.StatusFound)
 		return
 	}
 	if !s.startSession(w, r, user.ID, "oidc", trust) {
