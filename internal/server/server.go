@@ -148,23 +148,20 @@ func New(d Deps) (*Server, error) {
 			DefaultExpiry: cfg.Shares.DefaultExpiry.Duration, MaxExpiry: cfg.Shares.MaxExpiry.Duration,
 			DropMaxBytes: cfg.Shares.DropMaxBytes, DropMaxFiles: cfg.Shares.DropMaxFiles, UploadMaxSize: cfg.Uploads.MaxSize,
 		},
-		loginBackoff:   auth.NewBackoff(5, time.Second, 15*time.Minute, time.Hour),
-		accountBackoff: auth.NewBackoff(20, time.Second, 30*time.Second, time.Hour),
-		totpBackoff:    auth.NewBackoff(5, 2*time.Second, 15*time.Minute, time.Hour),
-		shareBackoff:   auth.NewBackoff(10, time.Second, time.Minute, time.Hour),
-		// Share token lookups: 60/min per IP with a burst of 120.
-		shareLimiter: auth.NewRateLimiter(60, 120),
-		// Uploads started through drop links, per IP: a folder of small
-		// files is many in a short time.
-		dropLimiter:   auth.NewRateLimiter(600, 1200),
-		tokenLimiter:  auth.NewRateLimiter(30, 60),
-		reportLimiter: auth.NewRateLimiter(10, 20),
-		inviteLimit:   auth.NewRateLimiter(10, 20),
-		passkeyLimit:  auth.NewRateLimiter(30, 30),
-		ceremonyLimit: auth.NewRateLimiter(20, 20),
-		pending:       newPendingLogins(),
-		appMux:        http.NewServeMux(),
-		shareMux:      http.NewServeMux(),
+		loginBackoff:   loginFailures.new(),
+		accountBackoff: accountFailures.new(),
+		totpBackoff:    totpFailures.new(),
+		shareBackoff:   sharePasswordFailures.new(),
+		shareLimiter:   shareLookups.limiter(),
+		dropLimiter:    dropUploads.limiter(),
+		tokenLimiter:   badTokens.limiter(),
+		reportLimiter:  policyReports.limiter(),
+		inviteLimit:    inviteLookups.limiter(),
+		passkeyLimit:   passkeyLogins.limiter(),
+		ceremonyLimit:  ceremonies.limiter(),
+		pending:        newPendingLogins(),
+		appMux:         http.NewServeMux(),
+		shareMux:       http.NewServeMux(),
 	}
 	if s.shares.DefaultExpiry <= 0 || s.shares.DefaultExpiry > s.shares.MaxExpiry {
 		s.shares.DefaultExpiry = s.shares.MaxExpiry
@@ -359,7 +356,7 @@ func (s *Server) Janitor(ctx context.Context) {
 	if s.r2 != nil {
 		go s.r2.Run(ctx)
 	}
-	t := time.NewTicker(time.Hour)
+	t := time.NewTicker(janitorEvery)
 	defer t.Stop()
 	for {
 		func() {
@@ -395,16 +392,16 @@ func (s *Server) cleanup(ctx context.Context) {
 		}
 	}
 	// Keep expired/revoked shares for 30 days for the owner's reference.
-	if _, err := s.store.DeleteSharesExpiredBefore(ctx, now.AddDate(0, 0, -30)); err != nil {
+	if _, err := s.store.DeleteSharesExpiredBefore(ctx, now.AddDate(0, 0, -keepEndedDays)); err != nil {
 		slog.Error("share cleanup", "err", err)
 	}
-	if err := s.store.DeleteAPITokensBefore(ctx, now.AddDate(0, 0, -30)); err != nil {
+	if err := s.store.DeleteAPITokensBefore(ctx, now.AddDate(0, 0, -keepEndedDays)); err != nil {
 		slog.Error("token cleanup", "err", err)
 	}
-	if err := s.store.DeleteFileTypesBefore(ctx, now.AddDate(0, 0, -90)); err != nil {
+	if err := s.store.DeleteFileTypesBefore(ctx, now.AddDate(0, 0, -keepFileTypesDays)); err != nil {
 		slog.Error("file type cleanup", "err", err)
 	}
-	s.uploads.Cleanup(24 * time.Hour)
+	s.uploads.Cleanup(staleUpload)
 	s.pending.gc()
 	s.webauthn.GC()
 	if s.media != nil {
