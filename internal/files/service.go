@@ -23,7 +23,6 @@ type Service struct {
 type reservation struct {
 	userID int64
 	bytes  int64
-	at     time.Time
 }
 
 type usageEntry struct {
@@ -318,23 +317,23 @@ func (s *Service) Reserve(ctx context.Context, uploadID string, userID int64, a 
 			return false
 		}
 	}
-	s.reserved[uploadID] = reservation{userID: userID, bytes: n, at: time.Now()}
+	s.reserved[uploadID] = reservation{userID: userID, bytes: n}
 	return true
 }
 
-// Release drops a reservation (upload finished, cancelled or expired).
+// Release drops a reservation. A reservation lasts as long as its upload:
+// it is dropped when the upload is finished, cancelled or cleaned up, never
+// by age, or a slow upload would stop counting against the quota.
 func (s *Service) Release(uploadID string) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	delete(s.reserved, uploadID)
 }
 
-func (s *Service) ReleaseOlderThan(d time.Duration) {
+// RestoreReservation re-records the reservation of an upload found on disk at
+// startup, without a quota check: its bytes were admitted when it was created.
+func (s *Service) RestoreReservation(uploadID string, userID, n int64) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
-	for id, r := range s.reserved {
-		if time.Since(r.at) > d {
-			delete(s.reserved, id)
-		}
-	}
+	s.reserved[uploadID] = reservation{userID: userID, bytes: n}
 }

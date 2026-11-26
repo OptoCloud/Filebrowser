@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"filebrowser/internal/auth"
+	"filebrowser/internal/files"
 	"filebrowser/internal/store"
+	"filebrowser/internal/uploads"
 )
 
 // Regression tests for findings from the security scan.
@@ -477,4 +479,50 @@ func TestTypeComesFromContentNotName(t *testing.T) {
 		}
 	}
 	expect(t, c.do("GET", "/api/files/archive?path=real.png", nil), 422)
+}
+
+// An upload in progress holds its quota for as long as it exists: across a
+// restart and however old it is, until it is finished or cleaned up.
+func TestUploadReservationOutlivesRestart(t *testing.T) {
+	h := newHarness(t)
+	u := h.user("jon", "user", store.Grant{Path: "jon", Permission: "write"})
+	q := int64(100)
+	if err := h.store.UpdateUser(context.Background(), u.ID, store.UserUpdate{QuotaBytes: &q}); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(h.root, "jon"), 0o755)
+	c := h.login("jon")
+	start := func(n int) int {
+		c.headers["Tus-Resumable"] = "1.0.0"
+		c.headers["Upload-Length"] = strconv.Itoa(n)
+		c.headers["Upload-Metadata"] = tusMeta("filename", "big.bin", "dir", "jon")
+		defer delete(c.headers, "Upload-Length")
+		defer delete(c.headers, "Upload-Metadata")
+		return c.do("POST", "/api/uploads/", []byte{}).Code
+	}
+	if code := start(80); code != 201 {
+		t.Fatalf("first upload: %d", code)
+	}
+	// A new process finds the upload on disk and reserves its bytes again.
+	fsvc := files.NewService(h.srv.files.FS, h.store)
+	if _, err := uploads.New(fsvc, h.srv.shares, h.srv.audit, appOrigin, shareOrigin, 1<<30, nil); err != nil {
+		t.Fatal(err)
+	}
+	a, err := files.AccessFor(context.Background(), h.store, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fsvc.Reserve(context.Background(), "second", u.ID, a, 80, q) {
+		t.Fatal("the upload in progress was not reserved after a restart")
+	}
+	// Cleaning up uploads that are not stale releases nothing.
+	h.srv.uploads.Cleanup(time.Hour)
+	if code := start(80); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("second upload while the first is in progress: %d", code)
+	}
+	// Once the first is cleaned up as stale, its quota is free again.
+	h.srv.uploads.Cleanup(-time.Second)
+	if code := start(80); code != 201 {
+		t.Fatalf("upload after cleanup: %d", code)
+	}
 }

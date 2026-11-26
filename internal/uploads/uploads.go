@@ -59,6 +59,7 @@ type shareCtxKey struct{}
 func New(fsvc *files.Service, sh *shares.Service, al *audit.Logger, appOrigin, shareOrigin string, maxSize int64, failedLookup func(ip string) bool) (*Uploads, error) {
 	u := &Uploads{files: fsvc, shares: sh, audit: al, maxSize: maxSize, failedLookup: failedLookup}
 	u.store = rootStore{fs: fsvc.FS}
+	u.restoreReservations()
 	// One process serves all uploads, so in-memory locks suffice.
 	locker := memorylocker.New()
 
@@ -165,7 +166,7 @@ func (u *Uploads) appCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse, t
 	if err != nil {
 		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
 	}
-	return tushandler.HTTPResponse{}, u.changes(uploadID, "u:"+strconv.FormatInt(id.User.ID, 10), dir, name), nil
+	return tushandler.HTTPResponse{}, u.changes(uploadID, "u:"+strconv.FormatInt(id.User.ID, 10), id.User.ID, dir, name), nil
 }
 
 func (u *Uploads) appFinish(ev tushandler.HookEvent) (tushandler.HTTPResponse, error) {
@@ -199,17 +200,18 @@ func (u *Uploads) shareCreate(ev tushandler.HookEvent) (tushandler.HTTPResponse,
 	if err != nil {
 		return tushandler.HTTPResponse{}, tushandler.FileInfoChanges{}, err
 	}
-	return tushandler.HTTPResponse{}, u.changes(uploadID, "s:"+strconv.FormatInt(res.Share.ID, 10), dir, name), nil
+	return tushandler.HTTPResponse{}, u.changes(uploadID, "s:"+strconv.FormatInt(res.Share.ID, 10), res.Owner.ID, dir, name), nil
 }
 
 // changes records the upload's owner and destination, and stages its data on
 // the destination's filesystem so that place can rename it into position.
-func (u *Uploads) changes(uploadID, owner, dir, name string) tushandler.FileInfoChanges {
+func (u *Uploads) changes(uploadID, owner string, quotaUser int64, dir, name string) tushandler.FileInfoChanges {
 	stage, _ := u.files.FS.ReservedDir(dir, "uploads")
 	return tushandler.FileInfoChanges{
 		ID:       uploadID,
 		MetaData: tushandler.MetaData{"filename": name},
-		Storage:  map[string]string{storageDir: stage, storageOwner: owner, storageDest: dir, storageName: name},
+		Storage: map[string]string{storageDir: stage, storageOwner: owner,
+			storageUser: strconv.FormatInt(quotaUser, 10), storageDest: dir, storageName: name},
 	}
 }
 
@@ -338,9 +340,52 @@ func (u *Uploads) withShare(next http.Handler) http.Handler {
 	})
 }
 
-// Cleanup removes incomplete uploads not touched for maxAge.
+// quotaUser is the user whose quota info counts against (0: unknown, an
+// upload from before that was recorded and made through a share).
+func quotaUser(info tushandler.FileInfo) int64 {
+	v := info.Storage[storageUser]
+	if v == "" {
+		v, _ = strings.CutPrefix(fact(info, storageOwner, legacyOwner), "u:")
+	}
+	id, _ := strconv.ParseInt(v, 10, 64)
+	return id
+}
+
+// restoreReservations reserves the quota of the uploads in progress when the
+// server last stopped; reservations are otherwise only kept in memory.
+func (u *Uploads) restoreReservations() {
+	for _, id := range u.pending() {
+		up, err := u.store.GetUpload(context.Background(), id)
+		if err != nil {
+			continue
+		}
+		info := up.(*rootUpload).info
+		if user := quotaUser(info); user != 0 {
+			u.files.RestoreReservation(id, user, info.Size)
+		}
+	}
+}
+
+// pending lists the IDs of the uploads that have an .info file.
+func (u *Uploads) pending() []string {
+	d, err := u.files.FS.Root().Open(files.UploadsDir)
+	if err != nil {
+		return nil
+	}
+	names, _ := d.Readdirnames(-1)
+	_ = d.Close()
+	var ids []string
+	for _, name := range names {
+		if id, ok := strings.CutSuffix(name, ".info"); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// Cleanup removes incomplete uploads not touched for maxAge, and with them
+// their quota reservations.
 func (u *Uploads) Cleanup(maxAge time.Duration) {
-	u.files.ReleaseOlderThan(maxAge)
 	root := u.files.FS.Root()
 	d, err := root.Open(files.UploadsDir)
 	if err != nil {
@@ -373,10 +418,12 @@ func (u *Uploads) Cleanup(maxAge time.Duration) {
 				continue // still being written
 			}
 			_ = ru.Terminate(context.Background())
+			u.files.Release(id)
 			continue
 		}
 		// Unreadable info, or from the previous storage backend.
 		_ = root.Remove(files.UploadsDir + "/" + id)
 		_ = root.Remove(infoPath(id))
+		u.files.Release(id)
 	}
 }

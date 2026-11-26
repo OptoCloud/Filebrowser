@@ -37,6 +37,7 @@ const storageDir = "dir"
 // drop-link uploader must not learn the owner or the real folder).
 const (
 	storageOwner = "owner" // "u:<user id>" or "s:<share id>"
+	storageUser  = "user"  // id of the user whose quota the upload counts against
 	storageDest  = "dest"  // destination folder, relative to files_root
 	storageName  = "name"  // file name within it
 )
@@ -58,7 +59,7 @@ func (s rootStore) NewUpload(_ context.Context, info tushandler.FileInfo) (tusha
 		return nil, errors.New("uploads: invalid staging directory")
 	}
 	st := map[string]string{"Type": "rootstore", storageDir: dir}
-	for _, k := range []string{storageOwner, storageDest, storageName} {
+	for _, k := range []string{storageOwner, storageUser, storageDest, storageName} {
 		if v, ok := info.Storage[k]; ok {
 			st[k] = v
 		}
