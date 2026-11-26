@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -24,6 +25,7 @@ type softKey struct {
 	id      []byte
 	handle  []byte // user handle stored for discoverable use
 	counter uint32
+	attFmt  string // attestation format to claim; "none" if empty
 }
 
 var b64 = base64.RawURLEncoding
@@ -64,7 +66,8 @@ func (k *softKey) register(options map[string]any) json.RawMessage {
 	attested = binary.BigEndian.AppendUint16(attested, uint16(len(k.id)))
 	attested = append(append(attested, k.id...), cose...)
 	auth := k.authData(0x01|0x04|0x40, attested) // UP, UV, AT
-	att, _ := cbor.Marshal(map[string]any{"fmt": "none", "attStmt": map[string]any{}, "authData": auth})
+	attFmt := cmp.Or(k.attFmt, "none")
+	att, _ := cbor.Marshal(map[string]any{"fmt": attFmt, "attStmt": map[string]any{}, "authData": auth})
 	raw, _ := json.Marshal(map[string]any{
 		"id": b64.EncodeToString(k.id), "rawId": b64.EncodeToString(k.id), "type": "public-key",
 		"response": map[string]any{
@@ -121,7 +124,16 @@ func TestWebAuthnEndToEnd(t *testing.T) {
 	if me := decode[map[string]any](t, c.do("GET", "/api/me", nil)); me["restricted"] != true {
 		t.Fatalf("expected a restricted session, got %v", me)
 	}
+	// A registration that names an attestation format nothing here asks for
+	// is refused before that format's parser sees it.
+	odd := newSoftKey(t)
+	odd.attFmt = "tpm"
 	begin := decode[ceremonyJSON](t, c.do("POST", "/api/me/webauthn/register/begin", struct{}{}))
+	if rec := c.do("POST", "/api/me/webauthn/register/finish", map[string]any{
+		"ceremony": begin.Ceremony, "name": "odd", "credential": odd.register(begin.Options)}); rec.Code < 400 {
+		t.Fatalf("tpm attestation: %d", rec.Code)
+	}
+	begin = decode[ceremonyJSON](t, c.do("POST", "/api/me/webauthn/register/begin", struct{}{}))
 	expect(t, c.do("POST", "/api/me/webauthn/register/finish", map[string]any{
 		"ceremony": begin.Ceremony, "name": "YubiKey 5", "credential": key.register(begin.Options)}), 200)
 	me := decode[map[string]any](t, c.do("GET", "/api/me", nil))

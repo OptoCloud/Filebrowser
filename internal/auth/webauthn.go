@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"sync"
 	"time"
@@ -126,6 +127,15 @@ func (w *WebAuthn) CreateCredential(u *WebAuthnUser, c *Ceremony, response []byt
 	parsed, err := protocol.ParseCredentialCreationResponseBytes(response)
 	if err != nil {
 		return nil, err
+	}
+	// No attestation is asked for, and browsers then answer with "none" (or
+	// a self-signed "packed"). The other formats (TPM, Android, Apple) are
+	// much parsing code that a registering client would otherwise choose to
+	// run by naming them; nothing here relies on what they would prove.
+	switch f := parsed.Response.AttestationObject.Format; f {
+	case "none", "packed":
+	default:
+		return nil, fmt.Errorf("attestation format %q is not accepted", f)
 	}
 	return w.lib.CreateCredential(u, c.session, parsed)
 }
